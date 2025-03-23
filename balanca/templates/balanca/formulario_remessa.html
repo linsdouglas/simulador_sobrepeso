@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Simulador de Balança</title>
+    <style>
+      /* Aqui você pode colocar estilos CSS para deixar parecido com seu simulador atual */
+      .container {
+          max-width: 600px;
+          margin: 0 auto;
+          padding: 20px;
+      }
+      .field {
+          margin-bottom: 15px;
+      }
+      label {
+          display: block;
+          font-weight: bold;
+      }
+      input[type="text"],
+      input[type="number"] {
+          width: 100%;
+          padding: 8px;
+      }
+      button {
+          padding: 10px 15px;
+          cursor: pointer;
+      }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>Análise de Ocorrências / Divergência de Peso</h1>
+
+    <!-- Formulário que envia dados via POST para a mesma página (URL) -->
+    <form method="POST">
+        {% csrf_token %}
+        
+        <div class="field">
+            <label for="remessa">Número da Remessa</label>
+            <input type="text" id="remessa" name="remessa" required>
+        </div>
+        
+        <div class="field">
+            <label for="placa">Placa do Veículo</label>
+            <input type="text" id="placa" name="placa">
+        </div>
+        
+        <div class="field">
+            <label for="peso_vazio">Peso Veículo Vazio (kg)</label>
+            <input type="number" step="0.01" id="peso_vazio" name="peso_vazio">
+        </div>
+        
+        
+        <button type="submit">Calcular</button>
+    </form>
+    
+    <!-- Se a view retornar algum resultado, exibimos aqui -->
+    {% if resultado %}
+    <hr>
+    <h2>Resultado da Análise</h2>
+    <p>Remessa: {{ resultado.remessa }}</p>
+    <p>Peso do Veículo Vazio: {{ resultado.peso_veiculo_vazio }} kg</p>
+    <p>Quantidade de Caixas: {{ resultado.qtd_caixas }}</p>
+    <p>Peso por Caixa: {{ resultado.peso_por_caixa }} kg</p>
+    <p>Peso Base (Caixas): {{ resultado.peso_base }} kg</p>
+    <p>Peso do Pallet (cada): {{ resultado.pallet_weight_share }} kg</p>
+    <p>Total de Sobrepeso Aplicado: {{ resultado.total_overweight_adjustment }} kg</p>
+    <p>Peso Final Calculado: {{ resultado.peso_final }} kg</p>
+    {% elif erro %}
+    <p>{{ erro }}</p>
+    {% endif %}
+</div>
+</body>
+</html>

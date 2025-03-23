@@ -1,0 +1,16 @@
+# Ignorar arquivos de build
+build/
+dist/
+
+# Ignorar executáveis
+*.exe
+*.pkg
+*.zip
+
+# Ignorar arquivos Python compilados
+__pycache__/
+*.pyc
+
+# Ignorar arquivos temporários
+*.log
+*.tmp
