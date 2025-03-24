@@ -1,27 +1,15 @@
 from django.shortcuts import render
 import pandas as pd
+import os
 
-# Caminhos para as planilhas (ajuste conforme necessário)
-sap_file = 'C://Users//xql80316//Downloads//dados_sap.xlsx'
-sku_file = 'C://Users//xql80316//Downloads//dados_sku.xlsx'
-sobrepeso_file = 'C://Users//xql80316//Downloads//dados_sobrepeso.xlsx'
-expedicao_file = 'C://Users//xql80316//Downloads//dados_expedicao.xlsx'
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # Caminho da pasta onde está o script
+
+sap_file = os.path.join(BASE_DIR, 'data', 'dados_sap.xlsx')
+sku_file = os.path.join(BASE_DIR, 'data', 'dados_sku.xlsx')
+sobrepeso_file = os.path.join(BASE_DIR, 'data', 'dados_sobrepeso.xlsx')
+expedicao_file = os.path.join(BASE_DIR, 'data', 'dados_expedicao.xlsx')
 
 # Carregar os dados de cada planilha
-df_sap = pd.read_excel(sap_file)
-df_sku = pd.read_excel(sku_file)
-df_sobrepeso = pd.read_excel(sobrepeso_file)
-df_expedicao = pd.read_excel(expedicao_file)
-
-import pandas as pd
-
-# Caminhos para as planilhas (ajuste conforme necessário)
-sap_file = 'C://Users//xql80316//Downloads//dados_sap.xlsx'            # Planilha do SAP
-sku_file = 'C://Users//xql80316//Downloads//dados_sku.xlsx'            # Planilha dos SKUs
-sobrepeso_file = 'C://Users//xql80316//Downloads//dados_sobrepeso.xlsx'  # Planilha do Sobrepeso
-expedicao_file = 'C://Users//xql80316//Downloads//dados_expedicao.xlsx'  # Planilha da Expedição
-
-# 1. Carregar os dados de cada planilha
 df_sap = pd.read_excel(sap_file)
 df_sku = pd.read_excel(sku_file)
 df_sobrepeso = pd.read_excel(sobrepeso_file)
