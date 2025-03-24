@@ -3,73 +3,128 @@
 <head>
     <meta charset="UTF-8">
     <title>Simulador de Balança</title>
+    <!-- Link para o CSS do Bootstrap -->
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.6.2/css/bootstrap.min.css">
     <style>
-      /* Aqui você pode colocar estilos CSS para deixar parecido com seu simulador atual */
-      .container {
-          max-width: 600px;
-          margin: 0 auto;
-          padding: 20px;
+      /* Layout geral em tema escuro */
+      body {
+          background-color: #111; /* Fundo principal */
+          color: #fff;           /* Texto padrão branco */
+          font-family: 'Roboto', sans-serif;
       }
-      .field {
-          margin-bottom: 15px;
+
+      /* Hero section (banner superior) */
+      .hero {
+          position: relative;
+          height: 60vh; /* altura do banner */
+          background: url("{% static 'balanca/images/warehouse.jpg' %}") center center no-repeat;
+          background-size: cover;
+          display: flex;
+          align-items: center;
+          justify-content: center;
       }
-      label {
-          display: block;
-          font-weight: bold;
+      .hero-overlay {
+          position: absolute;
+          top: 0; left: 0; right: 0; bottom: 0;
+          background: rgba(0, 0, 0, 0.6); /* Escurece a imagem de fundo */
       }
-      input[type="text"],
-      input[type="number"] {
-          width: 100%;
-          padding: 8px;
+      .hero-content {
+          position: relative;
+          z-index: 1; /* Fica acima do overlay */
+          text-align: center;
       }
-      button {
-          padding: 10px 15px;
-          cursor: pointer;
+      .hero-content h1 {
+          font-size: 3rem;
+          margin-bottom: 0.5rem;
+      }
+      .hero-content p {
+          font-size: 1.25rem;
+          color: #ccc;
+      }
+
+      /* Seção do formulário */
+      .form-section {
+          background: rgba(255, 255, 255, 0.05); /* Caixa semitransparente */
+          border-radius: 8px;
+          padding: 2rem;
+          margin-top: -3rem; /* Sobe a seção para sobrepor parte do banner */
+          box-shadow: 0 0 20px rgba(0,0,0,0.3);
+      }
+
+      /* Botão customizado */
+      .btn-custom {
+          background-color: #ff9800; /* Laranja */
+          border: none;
+      }
+      .btn-custom:hover {
+          background-color: #e68a00; /* Laranja mais escuro no hover */
+      }
+
+      /* Estilização das listas de resultados */
+      .list-group-item {
+          background: rgba(255, 255, 255, 0.1);
+          border: none;
+          color: #fff;
+      }
+
+      /* Alertas de erro */
+      .alert-danger {
+          background: rgba(255, 0, 0, 0.2);
+          border: none;
+          color: #f88;
       }
     </style>
 </head>
 <body>
-<div class="container">
-    <h1>Análise de Ocorrências / Divergência de Peso</h1>
+  <!-- Hero Section -->
+  <div class="hero">
+    <div class="hero-overlay"></div>
+    <div class="hero-content">
+      <h1>Simulador de Balança</h1>
+      <p>Análise de Ocorrências / Divergência de Peso</p>
+    </div>
+  </div>
 
-    <!-- Formulário que envia dados via POST para a mesma página (URL) -->
+  <!-- Seção do Formulário -->
+  <div class="container form-section">
     <form method="POST">
-        {% csrf_token %}
-        
-        <div class="field">
-            <label for="remessa">Número da Remessa</label>
-            <input type="text" id="remessa" name="remessa" required>
-        </div>
-        
-        <div class="field">
-            <label for="placa">Placa do Veículo</label>
-            <input type="text" id="placa" name="placa">
-        </div>
-        
-        <div class="field">
-            <label for="peso_vazio">Peso Veículo Vazio (kg)</label>
-            <input type="number" step="0.01" id="peso_vazio" name="peso_vazio">
-        </div>
-        
-        
-        <button type="submit">Calcular</button>
+      {% csrf_token %}
+      <div class="form-group">
+        <label for="remessa">Número da Remessa</label>
+        <input type="text" class="form-control" id="remessa" name="remessa" placeholder="Digite o número da remessa" required>
+      </div>
+      <div class="form-group">
+        <label for="placa">Placa do Veículo</label>
+        <input type="text" class="form-control" id="placa" name="placa" placeholder="Digite a placa (opcional)">
+      </div>
+      <div class="form-group">
+        <label for="peso_vazio">Peso Veículo Vazio (kg)</label>
+        <input type="number" step="0.01" class="form-control" id="peso_vazio" name="peso_vazio" placeholder="Ex: 5000" required>
+      </div>
+      <button type="submit" class="btn btn-custom">Calcular</button>
     </form>
-    
-    <!-- Se a view retornar algum resultado, exibimos aqui -->
+
+    <!-- Exibição do resultado ou erro -->
     {% if resultado %}
-    <hr>
-    <h2>Resultado da Análise</h2>
-    <p>Remessa: {{ resultado.remessa }}</p>
-    <p>Peso do Veículo Vazio: {{ resultado.peso_veiculo_vazio }} kg</p>
-    <p>Quantidade de Caixas: {{ resultado.qtd_caixas }}</p>
-    <p>Peso por Caixa: {{ resultado.peso_por_caixa }} kg</p>
-    <p>Peso Base (Caixas): {{ resultado.peso_base }} kg</p>
-    <p>Peso do Pallet (cada): {{ resultado.pallet_weight_share }} kg</p>
-    <p>Total de Sobrepeso Aplicado: {{ resultado.total_overweight_adjustment }} kg</p>
-    <p>Peso Final Calculado: {{ resultado.peso_final }} kg</p>
+      <hr>
+      <h2 class="mt-4">Resultado da Análise</h2>
+      <ul class="list-group text-white">
+          <li class="list-group-item"><strong>Remessa:</strong> {{ resultado.remessa }}</li>
+          <li class="list-group-item"><strong>Peso do Veículo Vazio:</strong> {{ resultado.peso_veiculo_vazio }} kg</li>
+          <li class="list-group-item"><strong>Quantidade de Caixas:</strong> {{ resultado.qtd_caixas }}</li>
+          <li class="list-group-item"><strong>Peso por Caixa:</strong> {{ resultado.peso_por_caixa }} kg</li>
+          <li class="list-group-item"><strong>Peso Base (Caixas):</strong> {{ resultado.peso_base }} kg</li>
+          <li class="list-group-item"><strong>Peso do Pallet (cada):</strong> {{ resultado.pallet_weight_share }} kg</li>
+          <li class="list-group-item"><strong>Total de Sobrepeso Aplicado:</strong> {{ resultado.total_overweight_adjustment }} kg</li>
+          <li class="list-group-item"><strong>Peso Final Calculado:</strong> {{ resultado.peso_final }} kg</li>
+      </ul>
     {% elif erro %}
-    <p>{{ erro }}</p>
+      <div class="alert alert-danger mt-4">{{ erro }}</div>
     {% endif %}
-</div>
+  </div>
+
+  <!-- Scripts do Bootstrap (JS) - Necessários para alguns componentes -->
+  <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
