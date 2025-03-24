@@ -2,8 +2,7 @@ from django.shortcuts import render
 import pandas as pd
 import os
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # Caminho da pasta onde está o script
-
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sap_file = os.path.join(BASE_DIR, 'data', 'dados_sap.xlsx')
 sku_file = os.path.join(BASE_DIR, 'data', 'dados_sku.xlsx')
 sobrepeso_file = os.path.join(BASE_DIR, 'data', 'dados_sobrepeso.xlsx')
@@ -14,6 +13,8 @@ df_sap = pd.read_excel(sap_file)
 df_sku = pd.read_excel(sku_file)
 df_sobrepeso = pd.read_excel(sobrepeso_file)
 df_expedicao = pd.read_excel(expedicao_file)
+
+import pandas as pd
 
 # Função para calcular o peso final de uma remessa
 def calcular_peso_final(remessa_num, peso_veiculo_vazio):
