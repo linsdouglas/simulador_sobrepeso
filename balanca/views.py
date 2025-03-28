@@ -110,7 +110,7 @@ def receber_expedicao(request):
             conexao = pymysql.connect(
                 host='database-1.cg78uc8q6n0y.us-east-1.rds.amazonaws.com',
                 user='dd_admin',
-                password='85838121aA@',
+                password='85838121aA',
                 database='SIMULADOR_SOBREPESO'
             )
 
