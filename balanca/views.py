@@ -1,6 +1,10 @@
 from django.shortcuts import render
 import pandas as pd
 import os
+from django.views.decorators.csrf import csrf_exempt
+from django.http import JsonResponse
+import json
+import pymysql
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sap_file = os.path.join(BASE_DIR, 'data', 'dados_sap.xlsx')
@@ -93,3 +97,31 @@ def analise_ocorrencias(request):
     return render(request, 'balanca/formulario_remessa.html', contexto)
 
 
+@csrf_exempt
+def receber_expedicao(request):
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+
+            sku = data.get('sku')
+            descricao = data.get('descricao')
+            quantidade = data.get('quantidade')
+
+            conexao = pymysql.connect(
+                host='database-1.cg78uc8q6n0y.us-east-1.rds.amazonaws.com',
+                user='dd_admin',
+                password='85838121aA@',
+                database='SIMULADOR_SOBREPESO'
+            )
+
+            with conexao.cursor() as cursor:
+                sql = "INSERT INTO tabela_exped (codigo_sku, descricao, quantidade, data) VALUES (%s, %s, %s, NOW())"
+                cursor.execute(sql, (sku, descricao, quantidade))
+                conexao.commit()
+
+            return JsonResponse({'mensagem': 'Dados inseridos com sucesso!'})
+
+        except Exception as e:
+            return JsonResponse({'erro': str(e)}, status=500)
+
+    return JsonResponse({'erro': 'Método não permitido'}, status=405)
