@@ -104,8 +104,10 @@ def receber_expedicao(request):
             data = json.loads(request.body)
 
             remessa = data.get('remessa')
-            item = data.get('sku')
+            item = data.get('item')
             quantidade = data.get('quantidade')
+            chave_plt = data.get('chave_plt')
+            data_str = data.get('data')
 
             conexao = pymysql.connect(
                 host='database-1.cg78uc8q6n0y.us-east-1.rds.amazonaws.com',
@@ -115,8 +117,8 @@ def receber_expedicao(request):
             )
 
             with conexao.cursor() as cursor:
-                sql = "INSERT INTO tabela_exped (REMESSA, ITEM, QUANTIDADE, data) VALUES (%s, %s, %s, NOW())"
-                cursor.execute(sql, (remessa, item, quantidade))
+                sql = "INSERT INTO tabela_exped (REMESSA, ITEM, QUANTIDADE,CHAVE_PALETE, DATA) VALUES (%s, %s, %s, %s)"
+                cursor.execute(sql, (remessa, item, quantidade,chave_plt,data_str))
                 conexao.commit()
 
             return JsonResponse({'mensagem': 'Dados inseridos com sucesso!'})
