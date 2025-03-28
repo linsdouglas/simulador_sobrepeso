@@ -103,8 +103,8 @@ def receber_expedicao(request):
         try:
             data = json.loads(request.body)
 
-            sku = data.get('sku')
-            descricao = data.get('descricao')
+            remessa = data.get('remessa')
+            item = data.get('sku')
             quantidade = data.get('quantidade')
 
             conexao = pymysql.connect(
@@ -115,8 +115,8 @@ def receber_expedicao(request):
             )
 
             with conexao.cursor() as cursor:
-                sql = "INSERT INTO tabela_exped (codigo_sku, descricao, quantidade, data) VALUES (%s, %s, %s, NOW())"
-                cursor.execute(sql, (sku, descricao, quantidade))
+                sql = "INSERT INTO tabela_exped (REMESSA, ITEM, QUANTIDADE, data) VALUES (%s, %s, %s, NOW())"
+                cursor.execute(sql, (remessa, item, quantidade))
                 conexao.commit()
 
             return JsonResponse({'mensagem': 'Dados inseridos com sucesso!'})
