@@ -14,4 +14,5 @@ __pycache__/
 # Ignorar arquivos temporários
 *.log
 *.tmp
-*.env
+databaseinfo.env
+
