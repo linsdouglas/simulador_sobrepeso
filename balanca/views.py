@@ -113,10 +113,10 @@ def receber_expedicao(request):
             data_str = data.get('data')
 
             conexao = pymysql.connect(
-                host='database-1.cg78uc8q6n0y.us-east-1.rds.amazonaws.com',
-                user='dd_admin',
-                password='85838121aA',
-                database='SIMULADOR_SOBREPESO'
+                host=os.getenv('DB_HOST'),
+                user=os.getenv('DB_USER'),
+                password=os.getenv('DB_PASSWORD'),
+                database=os.getenv('DB_NAME')
             )
 
             with conexao.cursor() as cursor:
