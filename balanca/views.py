@@ -105,7 +105,7 @@ def receber_expedicao(request):
     if request.method == 'POST':
         try:
             data = json.loads(request.body)
-
+            print("Recebido via POST:", data)
             remessa = data.get('remessa')
             item = data.get('item')
             quantidade = data.get('quantidade')
