@@ -106,7 +106,7 @@ def receber_expedicao(request):
             remessa = data.get('remessa')
             item = data.get('item')
             quantidade = data.get('quantidade')
-            chave_plt = data.get('chave_plt')
+            chave_plt = data.get('chave_palete')
             data_str = data.get('data')
 
             conexao = pymysql.connect(
@@ -117,7 +117,7 @@ def receber_expedicao(request):
             )
 
             with conexao.cursor() as cursor:
-                sql = "INSERT INTO tabela_exped (REMESSA, ITEM, QUANTIDADE,CHAVE_PALETE, DATA) VALUES (%s, %s, %s, %s)"
+                sql = "INSERT INTO tabela_exped (REMESSA, ITEM, QUANTIDADE,CHAVE_PALETE, DATA) VALUES (%s, %s, %s, %s,%s)"
                 cursor.execute(sql, (remessa, item, quantidade,chave_plt,data_str))
                 conexao.commit()
 
