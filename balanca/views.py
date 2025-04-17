@@ -6,19 +6,22 @@ from django.http import JsonResponse
 import json
 import pymysql
 from dotenv import load_dotenv
+from pathlib import Path
 
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = Path(__file__).resolve().parent
+env_path = BASE_DIR.parent / 'databaseinfo.env'
+load_dotenv(dotenv_path=env_path)
+
 sap_file = os.path.join(BASE_DIR, 'data', 'dados_sap.xlsx')
 sku_file = os.path.join(BASE_DIR, 'data', 'dados_sku.xlsx')
 sobrepeso_file = os.path.join(BASE_DIR, 'data', 'dados_sobrepeso.xlsx')
 expedicao_file = os.path.join(BASE_DIR, 'data', 'dados_expedicao.xlsx')
-
 df_sap = pd.read_excel(sap_file)
 df_sku = pd.read_excel(sku_file)
 df_sobrepeso = pd.read_excel(sobrepeso_file)
 df_expedicao = pd.read_excel(expedicao_file)
-load_dotenv(dotenv_path=os.path.join(BASE_DIR, 'databaseinfo.env'))
+
 
 import pandas as pd
 
