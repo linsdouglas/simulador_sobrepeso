@@ -10,6 +10,25 @@ def envio_sap_api():
     arquivo_excel = os.path.join(download_dir, 'EXPORT.XLSX')
 
     df = pd.read_excel(arquivo_excel)
+    df.columns = [col.strip().lower().replace(" ", "_") for col in df.columns]
+    df.rename(columns={
+    "doc.material": "doc_material",
+    "ano_doc.material": "ano_doc_material",
+    "item_doc.material": "item_doc_material",
+    "data_de_entrada": "data_entrada",
+    "depósito": "deposito",
+    "data_do_vencimento": "data_vencimento",
+    "data_de_produção": "data_producao",
+    "qtd.__um_registro": "qtd_um_registro",
+    "nome_do_usuário": "nome_usuario",
+    "data_de_criação": "data_criacao",
+    "hora_de_criação": "hora_criacao",
+    "data_de_modificação": "data_modificacao",
+    "hora_de_modificação": "hora_modificacao"
+}, inplace=True)
+
+    print("Colunas normalizadas:", df.columns.tolist())
+
 
     for col in df.columns:
         df[col] = df[col].apply(lambda x:
@@ -17,7 +36,7 @@ def envio_sap_api():
             else x.strftime("%H:%M:%S") if isinstance(x, datetime.time) and not pd.isna(x)
             else x
         )
-
+    print(df[["data_criacao", "data_entrada", "hora_criacao"]].head())
     df = df.where(pd.notnull(df), None)
 
     json_data = df.to_dict(orient='records')
@@ -45,7 +64,8 @@ def envio_sap_api():
                 tqdm.write(f"Bloco {i//batch_size + 1} retornou erro {response.status_code}: {response.text}")
 
         except Exception as e:
-            tqdm.write(f"Erro ao enviar bloco {i//batch_size + 1}: {str(e)}")
+            tqdm.write(f"❌ Bloco {i//batch_size + 1} retornou erro {response.status_code}")
+            print("⚠️ Resposta resumida:", response.text[:50])  # imprime só os primeiros 300 caracteres
 
 if __name__ == "__main__":
     envio_sap_api()
