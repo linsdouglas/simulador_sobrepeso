@@ -5,17 +5,25 @@ from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
 import json
 import pymysql
+from dotenv import load_dotenv
+from pathlib import Path
+from pymysql import OperationalError
+import logging
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+logger = logging.getLogger(__name__)
+BASE_DIR = Path(__file__).resolve().parent
+env_path = BASE_DIR.parent / 'databaseinfo.env'
+load_dotenv(dotenv_path="/home/ubuntu/simulador_sobrepeso/databaseinfo.env")
+
 sap_file = os.path.join(BASE_DIR, 'data', 'dados_sap.xlsx')
 sku_file = os.path.join(BASE_DIR, 'data', 'dados_sku.xlsx')
 sobrepeso_file = os.path.join(BASE_DIR, 'data', 'dados_sobrepeso.xlsx')
 expedicao_file = os.path.join(BASE_DIR, 'data', 'dados_expedicao.xlsx')
-
 df_sap = pd.read_excel(sap_file)
 df_sku = pd.read_excel(sku_file)
 df_sobrepeso = pd.read_excel(sobrepeso_file)
 df_expedicao = pd.read_excel(expedicao_file)
+
 
 import pandas as pd
 
@@ -67,7 +75,7 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio):
             print(f"Nenhum dado de sobrepeso encontrado para o pallet com data {data_producao.date()} e linha {linha_produzida}.")
     
     
-    peso_final = (peso_veiculo_vazio)+(peso_base + overweight_adjustment)
+    peso_final = peso_veiculo_vazio + (peso_base + total_overweight_adjustment)
 
     return {
         'remessa': remessa_num,
@@ -102,28 +110,34 @@ def receber_expedicao(request):
     if request.method == 'POST':
         try:
             data = json.loads(request.body)
-
+            logger.info(f"Recebido via POST: {data}")
             remessa = data.get('remessa')
             item = data.get('item')
             quantidade = data.get('quantidade')
-            chave_plt = data.get('chave_plt')
+            chave_plt = data.get('chave_palete')
             data_str = data.get('data')
+            print("Tentando conectar ao banco...")
+            try:
+                conexao = pymysql.connect(
+                    host=os.getenv('DB_HOST'),
+                    user=os.getenv('DB_USER'),
+                    password=os.getenv('DB_PASSWORD'),
+                    database=os.getenv('DB_NAME')
+                )
+            except OperationalError as e:
+                print("Erro de conexão com o banco:", e)
+                return JsonResponse({'erro': 'Erro de conexão com o banco de dados'}, status=500)
 
-            conexao = pymysql.connect(
-                host='database-1.cg78uc8q6n0y.us-east-1.rds.amazonaws.com',
-                user='dd_admin',
-                password='85838121aA',
-                database='SIMULADOR_SOBREPESO'
-            )
 
             with conexao.cursor() as cursor:
-                sql = "INSERT INTO tabela_exped (REMESSA, ITEM, QUANTIDADE,CHAVE_PALETE, DATA) VALUES (%s, %s, %s, %s)"
+                sql = "INSERT INTO tabela_exped (REMESSA, ITEM, QUANTIDADE,CHAVE_PALETE, DATA) VALUES (%s, %s, %s, %s,%s)"
                 cursor.execute(sql, (remessa, item, quantidade,chave_plt,data_str))
                 conexao.commit()
 
             return JsonResponse({'mensagem': 'Dados inseridos com sucesso!'})
 
         except Exception as e:
+            print("Erro durante a inserção:", str(e))
             return JsonResponse({'erro': str(e)}, status=500)
 
     return JsonResponse({'erro': 'Método não permitido'}, status=405)
