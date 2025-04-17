@@ -52,13 +52,13 @@ def login_sap():
         driver.get(url)
         time.sleep(2)
         username_field = WebDriverWait(driver, 5).until(
-            EC.presence_of_element_located((By.XPATH, "//input[@type='text' and @name='username']"))
+            EC.presence_of_element_located((By.XPATH, "//input[@type='email' and @name='loginfmt']"))
         )
         print("Campo de usuário encontrado, efetuando printin...")
         username_field.clear()
-        username_field.send_keys("xql80316")
+        username_field.send_keys("xql80316@mdb.com.br")
         password_field = WebDriverWait(driver, 5).until(
-            EC.presence_of_element_located((By.XPATH, "//input[@type='password' and @name='password']"))
+            EC.presence_of_element_located((By.XPATH, "//input[@type='password' and @name='passwd']"))
         )
         password_field.clear()
         password_field.send_keys("8583Doug#")
