@@ -73,7 +73,7 @@ def interacoes_sap(driver,actions):
     try:
         WebDriverWait(driver, 5).until(lambda d: d.execute_script("return document.readyState") == "complete")
         time.sleep(2)
-        elemento_pesq = WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.ID, 'ToolbarOkCode')))
+        elemento_pesq = WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.ID, 'ToolbarOkCode')))
         safe_click(driver,(By.ID, 'ToolbarOkCode'),nome_elemento="barra de pesquisa principal do sap")
         time.sleep(1)
         elemento_pesq.clear()
@@ -174,11 +174,11 @@ def envio_sap_api():
 
     df = pd.read_excel(arquivo)
 
-    for col in [
-        "Data de entrada", "Data do vencimento", "Data de produção",
-        "Data de criação", "Data de modificação"
-    ]:
-        df[col] = pd.to_datetime(df[col]).dt.strftime("%Y-%m-%d")
+    for col in df.columns:
+        df[col] = df[col].apply(lambda x: x.strftime("%H:%M:%S") if isinstance(x, datetime.time) else x)
+        
+    if 'DATA' in df.columns:
+        df['DATA'] = pd.to_datetime(df['DATA']).dt.strftime('%Y-%m-%d')
     json_data = df.to_dict(orient='records')
     url = "https://simuladorsobrepesovitarella.com/balanca/api/upload_sap/"
     headers = {"Content-Type": "application/json"}
