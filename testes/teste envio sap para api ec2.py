@@ -12,7 +12,7 @@ def envio_sap_api():
 
     for col in df.columns:
         df[col] = df[col].apply(lambda x:
-            x.strftime("%Y-%m-%d %H:%M:%S") if isinstance(x, (pd.Timestamp, datetime.datetime)) and not pd.isna(x)
+            x.strftime("%Y-%m-%d") if isinstance(x, (pd.Timestamp, datetime.datetime)) and not pd.isna(x)
             else x.strftime("%H:%M:%S") if isinstance(x, datetime.time) and not pd.isna(x)
             else x
         )
