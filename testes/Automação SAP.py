@@ -35,7 +35,7 @@ if not os.path.exists(download_dir):
     os.makedirs(download_dir)
 url = "https://s4.mdiasbranco.com.br:44380/sap/bc/gui/sap/its/webgui#"
 chrome_options = webdriver.ChromeOptions()
-chrome_options.debugger_address = "localhost:9222"
+#chrome_options.debugger_address = "localhost:9222"
 driver = webdriver.Chrome(options=chrome_options)
 #chrome_options.add_argument("--headless=new")
 chrome_options.add_argument("--disable-gpu")
