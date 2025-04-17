@@ -12,7 +12,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 env_path = BASE_DIR.parent / 'databaseinfo.env'
 print("HOST:", os.getenv("DB_HOST"))
-load_dotenv(dotenv_path=env_path)
+load_dotenv(dotenv_path="/home/ubuntu/simulador_sobrepeso/databaseinfo.env")
 
 sap_file = os.path.join(BASE_DIR, 'data', 'dados_sap.xlsx')
 sku_file = os.path.join(BASE_DIR, 'data', 'dados_sku.xlsx')
