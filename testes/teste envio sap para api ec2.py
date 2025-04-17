@@ -83,7 +83,7 @@ def envio_sap_api():
                 url,
                 json=bloco,
                 headers=headers,
-                verify=certifi.where(),
+                verify=False,
                 timeout=60
             )
 
