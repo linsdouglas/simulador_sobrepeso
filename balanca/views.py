@@ -7,11 +7,12 @@ import json
 import pymysql
 from dotenv import load_dotenv
 from pathlib import Path
+from pymysql import OperationalError
+import logging
 
-
+logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
 env_path = BASE_DIR.parent / 'databaseinfo.env'
-print("HOST:", os.getenv("DB_HOST"))
 load_dotenv(dotenv_path="/home/ubuntu/simulador_sobrepeso/databaseinfo.env")
 
 sap_file = os.path.join(BASE_DIR, 'data', 'dados_sap.xlsx')
@@ -74,7 +75,7 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio):
             print(f"Nenhum dado de sobrepeso encontrado para o pallet com data {data_producao.date()} e linha {linha_produzida}.")
     
     
-    peso_final = (peso_veiculo_vazio)+(peso_base + overweight_adjustment)
+    peso_final = peso_veiculo_vazio + (peso_base + total_overweight_adjustment)
 
     return {
         'remessa': remessa_num,
@@ -109,20 +110,17 @@ def receber_expedicao(request):
     if request.method == 'POST':
         try:
             data = json.loads(request.body)
-            print("Recebido via POST:", data)
+            logger.info(f"Recebido via POST: {data}")
             remessa = data.get('remessa')
             item = data.get('item')
             quantidade = data.get('quantidade')
             chave_plt = data.get('chave_palete')
             data_str = data.get('data')
             print("Tentando conectar ao banco...")
-
-            conexao = pymysql.connect(
-                host=os.getenv('DB_HOST'),
-                user=os.getenv('DB_USER'),
-                password=os.getenv('DB_PASSWORD'),
-                database=os.getenv('DB_NAME')
-            )
+            try:
+                conexao = pymysql.connect(...)
+            except OperationalError as e:
+                print("Erro de conexão com o banco:",e)
 
             with conexao.cursor() as cursor:
                 sql = "INSERT INTO tabela_exped (REMESSA, ITEM, QUANTIDADE,CHAVE_PALETE, DATA) VALUES (%s, %s, %s, %s,%s)"
