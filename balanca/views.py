@@ -111,6 +111,7 @@ def receber_expedicao(request):
             quantidade = data.get('quantidade')
             chave_plt = data.get('chave_palete')
             data_str = data.get('data')
+            print("Tentando conectar ao banco...")
 
             conexao = pymysql.connect(
                 host=os.getenv('DB_HOST'),
@@ -127,6 +128,7 @@ def receber_expedicao(request):
             return JsonResponse({'mensagem': 'Dados inseridos com sucesso!'})
 
         except Exception as e:
+            print("Erro durante a inserção:", str(e))
             return JsonResponse({'erro': str(e)}, status=500)
 
     return JsonResponse({'erro': 'Método não permitido'}, status=405)
