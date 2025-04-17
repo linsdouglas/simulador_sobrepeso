@@ -118,9 +118,16 @@ def receber_expedicao(request):
             data_str = data.get('data')
             print("Tentando conectar ao banco...")
             try:
-                conexao = pymysql.connect(...)
+                conexao = pymysql.connect(
+                    host=os.getenv('DB_HOST'),
+                    user=os.getenv('DB_USER'),
+                    password=os.getenv('DB_PASSWORD'),
+                    database=os.getenv('DB_NAME')
+                )
             except OperationalError as e:
-                print("Erro de conexão com o banco:",e)
+                print("Erro de conexão com o banco:", e)
+                return JsonResponse({'erro': 'Erro de conexão com o banco de dados'}, status=500)
+
 
             with conexao.cursor() as cursor:
                 sql = "INSERT INTO tabela_exped (REMESSA, ITEM, QUANTIDADE,CHAVE_PALETE, DATA) VALUES (%s, %s, %s, %s,%s)"
