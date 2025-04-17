@@ -1,3 +1,25 @@
 from django.db import models
 
-# Create your models here.
+class RegistroSAP(models.Model):
+    chave_pallet = models.CharField(max_length=100)
+    doc_material = models.CharField(max_length=50)
+    ano_doc_material = models.IntegerField()
+    item_doc_material = models.IntegerField()
+    data_entrada = models.DateField()
+    centro = models.CharField(max_length=10)
+    deposito = models.CharField(max_length=10)
+    material = models.CharField(max_length=50)
+    lote = models.CharField(max_length=50)
+    data_vencimento = models.DateField()
+    data_producao = models.DateField()
+    ordem = models.CharField(max_length=50)
+    qtd_um_registro = models.DecimalField(max_digits=10, decimal_places=2)
+    um_registro = models.CharField(max_length=10)
+    status_chave_pallet = models.CharField(max_length=10, blank=True)
+    nome_usuario = models.CharField(max_length=100)
+    data_criacao = models.DateField()
+    hora_criacao = models.TimeField()
+    modificado_por = models.CharField(max_length=100)
+    data_modificacao = models.DateField()
+    hora_modificacao = models.TimeField()
+    criado_em = models.DateTimeField(auto_now_add=True)

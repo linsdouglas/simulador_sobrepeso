@@ -3,6 +3,7 @@ import pandas as pd
 import os
 from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
+from .models import RegistroSAP
 import json
 import pymysql
 from dotenv import load_dotenv
@@ -141,3 +142,36 @@ def receber_expedicao(request):
             return JsonResponse({'erro': str(e)}, status=500)
 
     return JsonResponse({'erro': 'Método não permitido'}, status=405)
+
+def upload_sap(request):
+    if request.method == 'POST':
+        try:
+            dados = json.loads(request.body)
+            for row in dados:
+                RegistroSAP.objects.create(
+                    chave_pallet=row.get("Chave Pallet"),
+                    doc_material=row.get("Doc.material"),
+                    ano_doc_material=row.get("Ano doc.material"),
+                    item_doc_material=row.get("Item doc.material"),
+                    data_entrada=row.get("Data de entrada"),
+                    centro=row.get("Centro"),
+                    deposito=row.get("Depósito"),
+                    material=row.get("Material"),
+                    lote=row.get("Lote"),
+                    data_vencimento=row.get("Data do vencimento"),
+                    data_producao=row.get("Data de produção"),
+                    ordem=row.get("Ordem"),
+                    qtd_um_registro=row.get("Qtd.  UM registro"),
+                    um_registro=row.get("UM registro"),
+                    status_chave_pallet=row.get("Status Chave Pallet") or '',
+                    nome_usuario=row.get("Nome do usuário"),
+                    data_criacao=row.get("Data de criação"),
+                    hora_criacao=row.get("Hora de criação"),
+                    modificado_por=row.get("Modificado por"),
+                    data_modificacao=row.get("Data de modificação"),
+                    hora_modificacao=row.get("Hora de modificação"),
+                )
+            return JsonResponse({"status": "ok"}, status=201)
+        except Exception as e:
+            return JsonResponse({"erro": str(e)}, status=400)
+    return JsonResponse({"erro": "Método não permitido"}, status=405)
