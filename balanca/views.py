@@ -11,6 +11,8 @@ from pathlib import Path
 from pymysql import OperationalError
 import logging
 import traceback
+from django.utils.dateparse import parse_date, parse_time
+import certifi
 
 logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
@@ -150,30 +152,35 @@ def upload_sap(request):
             dados = json.loads(request.body)
             print("Registros recebidos:", len(dados))
             print("Primeiro registro:", dados[0] if dados else "vazio")
+            registros = []
             for row in dados:
-                RegistroSAP.objects.create(
-                    chave_pallet=row.get("chave_pallet"),
-                    doc_material=row.get("doc_material"),
-                    ano_doc_material=row.get("ano_doc_material"),
-                    item_doc_material=row.get("item_doc_material"),
-                    data_entrada=row.get("data_entrada"),
-                    centro=row.get("centro"),
-                    deposito=row.get("deposito"),
-                    material=row.get("material"),
-                    lote=row.get("lote"),
-                    data_vencimento=row.get("data_vencimento"),
-                    data_producao=row.get("data_producao"),
-                    ordem=row.get("ordem"),
-                    qtd_um_registro=row.get("qtd_um_registro"),
-                    um_registro=row.get("um_registro"),
-                    status_chave_pallet=row.get("status_chave_pallet") or '',
-                    nome_usuario=row.get("nome_usuario"),
-                    data_criacao=row.get("data_criacao"),
-                    hora_criacao=row.get("hora_criacao"),
-                    modificado_por=row.get("modificado_por"),
-                    data_modificacao=row.get("data_modificacao"),
-                    hora_modificacao=row.get("hora_modificacao"),
+                registros.append(
+                    RegistroSAP(
+                        chave_pallet=row.get("chave_pallet"),
+                        doc_material=row.get("doc_material"),
+                        ano_doc_material=row.get("ano_doc_material"),
+                        item_doc_material=row.get("item_doc_material"),
+                        data_entrada=parse_date(row.get("data_entrada")),
+                        centro=row.get("centro"),
+                        deposito=row.get("deposito"),
+                        material=row.get("material"),
+                        lote=row.get("lote"),
+                        data_vencimento=parse_date(row.get("data_vencimento")),
+                        data_producao=parse_date(row.get("data_producao")),
+                        ordem=row.get("ordem"),
+                        qtd_um_registro=row.get("qtd_um_registro"),
+                        um_registro=row.get("um_registro"),
+                        status_chave_pallet=row.get("status_chave_pallet") or '',
+                        nome_usuario=row.get("nome_usuario"),
+                        data_criacao=parse_date(row.get("data_criacao")),
+                        hora_criacao=parse_time(row.get("hora_criacao")),
+                        modificado_por=row.get("modificado_por"),
+                        data_modificacao=parse_date(row.get("data_modificacao")),
+                        hora_modificacao=parse_time(row.get("hora_modificacao")),
+                    )
                 )
+
+            RegistroSAP.objects.bulk_create(registros)
             return JsonResponse({"status": "ok"}, status=201)
         except Exception as e:
             print("ERRO AO PROCESSAR UPLOAD_SAP")
