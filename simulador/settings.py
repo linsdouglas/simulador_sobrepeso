@@ -172,3 +172,5 @@ LOGGING = {
         'level': 'INFO',
     },
 }
+print("✅ Logger configurado")
+
