@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 from pymysql import OperationalError
 import logging
+import traceback
 
 logger = logging.getLogger(__name__)
 BASE_DIR = Path(__file__).resolve().parent
@@ -147,6 +148,8 @@ def upload_sap(request):
     if request.method == 'POST':
         try:
             dados = json.loads(request.body)
+            print("Registros recebidos:", len(dados))
+            print("Primeiro registro:", dados[0] if dados else "vazio")
             for row in dados:
                 RegistroSAP.objects.create(
                     chave_pallet=row.get("Chave Pallet"),
@@ -173,5 +176,7 @@ def upload_sap(request):
                 )
             return JsonResponse({"status": "ok"}, status=201)
         except Exception as e:
-            return JsonResponse({"erro": str(e)}, status=400)
+            print("ERRO AO PROCESSAR UPLOAD_SAP")
+            traceback.print_exc()
+            return JsonResponse({'erro': str(e)}, status=500)
     return JsonResponse({"erro": "Método não permitido"}, status=405)
