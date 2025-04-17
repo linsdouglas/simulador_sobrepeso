@@ -27,6 +27,7 @@ import subprocess
 import pandas as pd
 import os
 import sys
+import requests
 
 base_sap="base_sap"
 download_dir = os.path.join(os.environ['USERPROFILE'], 'Downloads', base_sap)
@@ -164,7 +165,33 @@ def safe_click(driver, by_locator,nome_elemento="Elemento", timeout=10):
     except Exception as e:
         print(f"Erro inesperado ao tentar clicar: {repr(e)}")
 
+def envio_sap_api():
+    arquivo = os.path.join(download_dir, "EXPORT.XLSX")
+    
+    if not os.path.exists(arquivo):
+        print("Arquivo EXPORT.XLSX não encontrado. Cancelando envio.")
+        return
+
+    df = pd.read_excel(arquivo)
+
+    for col in [
+        "Data de entrada", "Data do vencimento", "Data de produção",
+        "Data de criação", "Data de modificação"
+    ]:
+        df[col] = pd.to_datetime(df[col]).dt.strftime("%Y-%m-%d")
+    json_data = df.to_dict(orient='records')
+    url = "https://simuladorsobrepesovitarella.com/balanca/api/upload_sap/"
+    headers = {"Content-Type": "application/json"}
+    response = requests.post(url, json=json_data, headers=headers)
+
+    print("Status:", response.status_code)
+    print("Resposta:", response.text)
+
+
 if __name__ == "__main__":
     login_sap()
     actions = ActionChains(driver)
     interacoes_sap(driver, actions)
+    envio_sap_api()
+    driver.quit()
+
