@@ -142,7 +142,7 @@ def receber_expedicao(request):
             return JsonResponse({'erro': str(e)}, status=500)
 
     return JsonResponse({'erro': 'Método não permitido'}, status=405)
-
+@csrf_exempt
 def upload_sap(request):
     if request.method == 'POST':
         try:
