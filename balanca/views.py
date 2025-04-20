@@ -132,7 +132,6 @@ def receber_expedicao(request):
                 print("Erro de conexão com o banco:", e)
                 return JsonResponse({'erro': 'Erro de conexão com o banco de dados'}, status=500)
 
-
             with conexao.cursor() as cursor:
                 sql = "INSERT INTO tabela_exped (REMESSA, ITEM, QUANTIDADE,CHAVE_PALETE, DATA) VALUES (%s, %s, %s, %s,%s)"
                 cursor.execute(sql, (remessa, item, quantidade,chave_plt,data_str))
@@ -162,23 +161,23 @@ def upload_sap(request):
                         doc_material=row.get("doc_material"),
                         ano_doc_material=row.get("ano_doc_material"),
                         item_doc_material=row.get("item_doc_material"),
-                        data_entrada=parse_date(row.get("data_entrada")),
+                        data_entrada=parse_date(str(row.get("data_entrada"))) if row.get("data_entrada") else None,
                         centro=row.get("centro"),
                         deposito=row.get("deposito"),
                         material=row.get("material"),
                         lote=row.get("lote"),
-                        data_vencimento=parse_date(row.get("data_vencimento")),
+                        data_vencimento=parse_date(str(row.get("data_vencimento"))) if row.get("data_vencimento") else None,
                         data_producao=parse_date(row.get("data_producao")),
                         ordem=row.get("ordem"),
                         qtd_um_registro=row.get("qtd_um_registro"),
                         um_registro=row.get("um_registro"),
                         status_chave_pallet=row.get("status_chave_pallet") or '',
                         nome_usuario=row.get("nome_usuario"),
-                        data_criacao=parse_date(row.get("data_criacao")),
-                        hora_criacao=parse_time(row.get("hora_criacao")),
+                        data_criacao=parse_date(str(row.get("data_criacao"))) if row.get("data_criacao") else None,
+                        hora_criacao=parse_time(str(row.get("hora_criacao"))) if row.get("hora_criacao") else None,
                         modificado_por=row.get("modificado_por"),
-                        data_modificacao=parse_date(row.get("data_modificacao")),
-                        hora_modificacao=parse_time(row.get("hora_modificacao")),
+                        data_modificacao=parse_date(str(row.get("data_modificacao"))) if row.get("data_modificacao") else None,
+                        hora_modificacao=parse_time(str(row.get("hora_modificacao"))) if row.get("hora_modificacao") else None,
                     )
                 )
 
