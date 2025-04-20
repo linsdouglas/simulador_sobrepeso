@@ -19,7 +19,7 @@ class RegistroSAP(models.Model):
     nome_usuario = models.CharField(max_length=100)
     data_criacao = models.DateField()
     hora_criacao = models.TimeField()
-    modificado_por = models.CharField(max_length=100)
+    modificado_por = models.CharField(max_length=100, null=True, blank=True)
     data_modificacao = models.DateField()
     hora_modificacao = models.TimeField()
     criado_em = models.DateTimeField(auto_now_add=True)
