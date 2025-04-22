@@ -24,52 +24,58 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_exp, df
         log_callback("Remessa não encontrada em data_exp.")
         return None
 
-    sku = df_remessa.iloc[0]['ITEM']
-    qtd_caixas = df_remessa['QUANTIDADE'].sum()
-    log_callback(f"SKU: {sku}, Quantidade de caixas: {qtd_caixas}")
+    skus = df_remessa['ITEM'].unique()
+    qtd_caixas_total = df_remessa['QUANTIDADE'].sum()
 
-    df_sku_filtrado = df_sku[(df_sku['COD_PRODUTO'] == sku) & (df_sku['DESC_UNID_MEDID'] == 'Caixa')]
-    if df_sku_filtrado.empty:
-        log_callback("SKU não encontrado ou unidade diferente de 'Caixa'.")
-        return None
+    peso_base_total = 0
+    sobrepesos_por_item = {}
+    sp_total = 0
 
-    peso_por_caixa = df_sku_filtrado.iloc[0]['QTDE_PESO_LIQ']
-    peso_base = qtd_caixas * peso_por_caixa
-    log_callback(f"Peso por caixa: {peso_por_caixa}, Peso base: {peso_base}")
+    for sku in skus:
+        qtd_caixas = df_remessa[df_remessa['ITEM'] == sku]['QUANTIDADE'].sum()
+        df_sku_filtrado = df_sku[(df_sku['COD_PRODUTO'] == sku) & (df_sku['DESC_UNID_MEDID'] == 'Caixa')]
+        if df_sku_filtrado.empty():
+            continue
 
-    chaves_pallet = df_remessa['CHAVE_PALETE'].unique()
-    df_pallets = df_sap[df_sap['Chave Pallet'].isin(chaves_pallet)]
-    if df_pallets.empty:
-        log_callback("Nenhum pallet encontrado em data_sap.")
-        return None
+        peso_por_caixa = df_sku_filtrado.iloc[0]['QTDE_PESO_LIQ']
+        peso_base = qtd_caixas * peso_por_caixa
+        peso_base_total += peso_base
 
-    total_overweight_adjustment = 0
-    for _, row in df_pallets.iterrows():
-        lote = row['Lote']
-        data_producao = row['Data de produção']
-        hora_inicio = row['Hora de criação'][:2] + ":00:00"
-        hora_fim = row['Hora de modificação'][:2] + ":00:00"
+        chaves_pallet = df_remessa[df_remessa['ITEM'] == sku]['CHAVE_PALETE'].unique()
+        df_pallets = df_sap[df_sap['Chave Pallet'].isin(chaves_pallet)]
 
-        linha_produzida = "L" + lote[-3:]
-        log_callback(f"Processando pallet: Lote {lote}, Linha {linha_produzida}, Data {data_producao}")
+        total_overweight = 0
+        count_sp = 0
 
-        df_sp_filtro = df_sobrepeso[
-            (df_sobrepeso['Linhas'] == linha_produzida) &
-            (df_sobrepeso['Data e Hora'] >= f"{data_producao} {hora_inicio}") &
-            (df_sobrepeso['Data e Hora'] <= f"{data_producao} {hora_fim}")
-        ]
+        for _, row in df_pallets.iterrows():
+            lote = row['Lote']
+            data_producao = row['Data de produção']
+            hora_inicio = row['Hora criação'][:2] + ":00:00"
+            hora_fim = row['Hora modificação'][:2] + ":00:00"
 
-        if not df_sp_filtro.empty:
-            media_sp = df_sp_filtro['Sobrepesohora'].mean()
-            ajuste = peso_base * media_sp
-            log_callback(f"Sobrepeso médio: {media_sp:.4f}, Ajuste: {ajuste:.2f}")
-            total_overweight_adjustment += ajuste
+            linha_produzida = "L" + lote[-3:]
+            df_sp_filtro = df_sobrepeso[
+                (df_sobrepeso['Linhas'] == linha_produzida) &
+                (df_sobrepeso['DataHora'] >= f"{data_producao} {hora_inicio}") &
+                (df_sobrepeso['DataHora'] <= f"{data_producao} {hora_fim}")
+            ]
 
-    peso_paletes = qtd_paletes * 26
-    peso_final = peso_veiculo_vazio + peso_base + total_overweight_adjustment + peso_paletes
-    log_callback(f"Peso dos paletes: {peso_paletes}, Peso final: {peso_final}")
+            if not df_sp_filtro.empty:
+                media_sp = df_sp_filtro['Sobrepesohora'].mean()
+                total_overweight += media_sp
+                count_sp += 1
 
-    return peso_base, total_overweight_adjustment, peso_paletes, peso_final
+        if count_sp > 0:
+            sp_medio = total_overweight / count_sp
+            sobrepesos_por_item[sku] = sp_medio
+            sp_total += peso_base * sp_medio
+
+    peso_com_sobrepeso = peso_base_total + sp_total
+    peso_total_com_paletes = peso_com_sobrepeso + (qtd_paletes * 26)
+    media_sp_geral = sum(sobrepesos_por_item.values()) / len(sobrepesos_por_item) if sobrepesos_por_item else 0
+
+    return peso_base_total, sp_total, peso_com_sobrepeso, peso_total_com_paletes, media_sp_geral, sobrepesos_por_item
+
 def preencher_formulario(wb, dados, sobrepesos_por_item):
     ws = wb["FORMULARIO"]
     ws["B4"] = dados['remessa']
@@ -105,9 +111,8 @@ def exportar_para_pdf(caminho_arquivo, aba_nome="FORMULARIO"):
     ws.Range("A1:D49").ExportAsFixedFormat(0, pdf_path)
     wb.Close(False)
     excel.Quit()
-    return pdf_pat
+    return pdf_path
 
-# === GUI Principal ===
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -157,42 +162,53 @@ class App(ctk.CTk):
         try:
             self.log_text.clear()
             self.log_display.configure(text="")
-            file_path = os.path.expanduser("C://Users//xql80316//Downloads//SIMULADOR_BALANÇA_3.0_1.xlsm")
+            file_path = os.path.expanduser("~/Desktop/SIMULADOR BALANÇA_3.0_1.xlsm")
             self.add_log("Abrindo planilha Excel...")
 
             xl = pd.ExcelFile(file_path)
-            df_exp = xl.parse("dado_exp")
-            df_sap = xl.parse("dado_sap")
+            df_exp = xl.parse("data_exp")
+            df_sap = xl.parse("data_sap")
             df_sku = xl.parse("dado_sku")
             df_sobrepeso = xl.parse("dado_sobrepeso")
-            df_sobrepeso = df_sobrepeso[~df_sobrepeso['Data e hora'].astype(str).str.contains("Redimensionar", na=False)]
-            df_sobrepeso['Data e hora'] = pd.to_datetime(df_sobrepeso['Data e hora'], errors='coerce')
-            df_sobrepeso = df_sobrepeso.dropna(subset=['Data e hora'])
-
+            df_sobrepeso = df_sobrepeso[~df_sobrepeso['DataHora'].astype(str).str.contains("Redimensionar", na=False)]
+            df_sobrepeso['DataHora'] = pd.to_datetime(df_sobrepeso['DataHora'], errors='coerce')
+            df_sobrepeso = df_sobrepeso.dropna(subset=['DataHora'])
 
             peso_vazio = float(self.peso_vazio.get())
             qtd_paletes = int(self.qtd_paletes.get())
+            remessa = int(self.remessa.get())
 
             self.add_log("Iniciando cálculo do peso final...")
             resultado = calcular_peso_final(
-                self.remessa.get(), peso_vazio, qtd_paletes,
+                remessa, peso_vazio, qtd_paletes,
                 df_exp, df_sku, df_sap, df_sobrepeso,
                 self.add_log
             )
 
             if resultado:
-                peso_base, sp, peso_paletes, peso_final = resultado
+                peso_base, sp_total, peso_com_sp, peso_final, media_sp, sp_itens = resultado
+
                 wb = load_workbook(file_path)
-                ws = wb["FORMULARIO"]
-                ultima_linha = ws.max_row + 1
-                ws.append([
-                    datetime.now().strftime("%d/%m/%Y %H:%M:%S"), self.placa.get(), self.turno.get(),
-                    self.remessa.get(), peso_vazio, peso_base, sp, peso_paletes, peso_final,
-                    float(self.peso_balanca.get()), float(self.peso_balanca.get()) - peso_final
-                ])
+                dados = {
+                    'remessa': remessa,
+                    'qtd_skus': df_exp[df_exp['REMESSA'] == remessa]['ITEM'].nunique(),
+                    'placa': self.placa.get(),
+                    'turno': self.turno.get(),
+                    'peso_vazio': peso_vazio,
+                    'peso_base': peso_base,
+                    'sp_total': sp_total,
+                    'peso_com_sp': peso_com_sp,
+                    'peso_total_final': peso_final,
+                    'media_sp': media_sp,
+                    'qtd_paletes': qtd_paletes
+                }
+                preencher_formulario(wb, dados, sp_itens)
                 wb.save(file_path)
-                self.add_log("Resultado salvo na aba FORMULARIO.")
-                messagebox.showinfo("Sucesso", "Resultado salvo com sucesso!")
+                self.add_log("Planilha preenchida com sucesso.")
+
+                pdf_path = exportar_para_pdf(file_path, "FORMULARIO")
+                self.add_log(f"Exportado para PDF: {pdf_path}")
+                messagebox.showinfo("Sucesso", f"Resultado salvo e exportado para PDF:\n{pdf_path}")
             else:
                 self.add_log("Falha no cálculo. Verifique os dados inseridos.")
                 messagebox.showwarning("Aviso", "Cálculo não pôde ser realizado.")
