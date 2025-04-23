@@ -13,24 +13,26 @@ import winreg
 from shutil import copyfile
 
 
-def obter_caminho_onedrive_empresa():
-    try:
-        key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER,
-            r"Software\Microsoft\OneDrive\Accounts\Business1"
-        )
-        valor, _ = winreg.QueryValueEx(key, "UserFolder")
-        return valor
-    except FileNotFoundError:
-        return None
-    
-base_onedrive = obter_caminho_onedrive_empresa()
+import os
 
-if base_onedrive:
-    fonte_dir = os.path.join(base_onedrive, "Gestão de Estoque - Documentos")
-    MODELO_FORMULARIO = os.path.join(fonte_dir, "SIMULADOR_BALANÇA_LIMPO_2.xlsx")
-else:
-    raise FileNotFoundError("Pasta do OneDrive Empresarial não encontrada no registro.")
+def encontrar_pasta_onedrive_empresa():
+    user_dir = os.environ["USERPROFILE"]
+    possiveis = os.listdir(user_dir)
+    for nome in possiveis:
+        if "DIAS BRANCO" in nome.upper():
+            caminho_completo = os.path.join(user_dir, nome)
+            if os.path.isdir(caminho_completo) and "Gestão de Estoque - Documentos" in os.listdir(caminho_completo):
+                return os.path.join(caminho_completo, "Gestão de Estoque - Documentos")
+    return None
+
+fonte_dir = encontrar_pasta_onedrive_empresa()
+if not fonte_dir:
+    raise FileNotFoundError("Não foi possível localizar a pasta sincronizada do SharePoint via OneDrive.")
+
+
+MODELO_FORMULARIO = os.path.join(fonte_dir, "SIMULADOR_BALANÇA_LIMPO_2.xlsx")
+
+
 
 def criar_copia_planilha(fonte_dir, nome_arquivo, log_callback):
     try:
