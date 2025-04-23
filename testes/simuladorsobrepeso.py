@@ -9,11 +9,28 @@ import os
 import win32com.client as win32
 import comtypes.client
 from pathlib import Path
+import winreg
+
+def obter_caminho_onedrive_empresa():
+    try:
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\OneDrive\Accounts\Business1"
+        )
+        valor, _ = winreg.QueryValueEx(key, "UserFolder")
+        return valor
+    except FileNotFoundError:
+        return None
+    
+base_onedrive = obter_caminho_onedrive_empresa()
+
+if base_onedrive:
+    fonte_dir = os.path.join(base_onedrive, "Gestão de Estoque - Documentos")
+    MODELO_FORMULARIO = os.path.join(fonte_dir, "SIMULADOR_BALANÇA_LIMPO.xlsx")
+else:
+    raise FileNotFoundError("Pasta do OneDrive Empresarial não encontrada no registro.")
 
 
-
-download_dir = os.path.join(os.environ['USERPROFILE'], 'Downloads')
-MODELO_FORMULARIO = os.path.join(download_dir, "SIMULADOR_BALANÇA_LIMPO.xlsx")
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
@@ -146,7 +163,7 @@ def preencher_formulario_com_openpyxl(path_copia, dados, sobrepesos_por_item, lo
         log_callback(f"Erro no preenchimento: {e}")
         raise
 
-def exportar_pdf_com_comtypes(path_xlsx, aba_nome="FORMULARIO", log_callback=None):
+def exportar_pdf_com_comtypes(path_xlsx, aba_nome="FORMULARIO", nome_remessa="REMESSA", log_callback=None):
     try:
         if log_callback:
             log_callback("Iniciando exportação via comtypes...")
@@ -163,11 +180,11 @@ def exportar_pdf_com_comtypes(path_xlsx, aba_nome="FORMULARIO", log_callback=Non
 
         ws = wb.Worksheets(aba_nome)
 
-        # Cria diretório temporário se não existir
         pdf_dir = "C:\\temp"
         os.makedirs(pdf_dir, exist_ok=True)
 
-        pdf_path = os.path.join(pdf_dir, f"{Path(path_xlsx).stem}_{aba_nome}.pdf")
+        pdf_path = os.path.join(pdf_dir, f"SOBREPESOSIMULADO - {nome_remessa}.pdf")
+
         if log_callback:
             log_callback(f"Tentando exportar para: {pdf_path}")
 
@@ -236,7 +253,7 @@ class App(ctk.CTk):
         try:
             self.log_text.clear()
             self.log_display.configure(text="")
-            file_path = os.path.join(download_dir,"SIMULADOR_BALANÇA_LIMPO.xlsx")
+            file_path = os.path.join(fonte_dir,"SIMULADOR_BALANÇA_LIMPO.xlsx")
             self.add_log(f"Abrindo planilha Excel em: {file_path}")
 
             xl = pd.ExcelFile(file_path)
@@ -285,7 +302,7 @@ class App(ctk.CTk):
                 preencher_formulario_com_openpyxl(file_path, dados, sp_itens, self.add_log)
 
                 self.add_log("Exportando PDF...")
-                pdf_path = exportar_pdf_com_comtypes(file_path, "FORMULARIO")
+                pdf_path = exportar_pdf_com_comtypes(file_path, "FORMULARIO", nome_remessa=remessa, log_callback=self.add_log)
                 self.add_log(f"PDF exportado com sucesso: {pdf_path}")
 
                 messagebox.showinfo("Sucesso", f"Resultado salvo e exportado para PDF:\n{pdf_path}")
