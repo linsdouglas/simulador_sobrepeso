@@ -10,6 +10,8 @@ import win32com.client as win32
 import comtypes.client
 from pathlib import Path
 import winreg
+from shutil import copyfile
+
 
 def obter_caminho_onedrive_empresa():
     try:
@@ -26,9 +28,23 @@ base_onedrive = obter_caminho_onedrive_empresa()
 
 if base_onedrive:
     fonte_dir = os.path.join(base_onedrive, "Gestão de Estoque - Documentos")
-    MODELO_FORMULARIO = os.path.join(fonte_dir, "SIMULADOR_BALANÇA_LIMPO.xlsx")
+    MODELO_FORMULARIO = os.path.join(fonte_dir, "SIMULADOR_BALANÇA_LIMPO_2.xlsx")
 else:
     raise FileNotFoundError("Pasta do OneDrive Empresarial não encontrada no registro.")
+
+def criar_copia_planilha(fonte_dir, nome_arquivo, log_callback):
+    try:
+        origem = os.path.join(fonte_dir, nome_arquivo)
+        destino_dir = os.path.join(os.environ['USERPROFILE'], 'Downloads')
+        timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+        nome_copia = f"copia_temp_{timestamp}_{nome_arquivo}"
+        destino = os.path.join(destino_dir, nome_copia)
+        copyfile(origem, destino)
+        log_callback(f"Cópia criada com sucesso: {destino}")
+        return destino
+    except Exception as e:
+        log_callback(f"Erro ao criar cópia da planilha: {e}")
+        raise
 
 
 
@@ -253,7 +269,7 @@ class App(ctk.CTk):
         try:
             self.log_text.clear()
             self.log_display.configure(text="")
-            file_path = os.path.join(fonte_dir,"SIMULADOR_BALANÇA_LIMPO.xlsx")
+            file_path = criar_copia_planilha(fonte_dir, "SIMULADOR_BALANÇA_LIMPO_2.xlsx", self.add_log)
             self.add_log(f"Abrindo planilha Excel em: {file_path}")
 
             xl = pd.ExcelFile(file_path)
