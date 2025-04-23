@@ -8,10 +8,11 @@ from tkinter import messagebox, StringVar
 import os
 import win32com.client as win32
 
+download_dir = os.path.join(os.environ['USERPROFILE'], 'Downloads')
+
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
 
-# === Função principal de cálculo ===
 def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_exp, df_sku, df_sap, df_sobrepeso, log_callback):
     try:
         remessa_num = int(remessa_num)
@@ -34,7 +35,7 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_exp, df
     for sku in skus:
         qtd_caixas = df_remessa[df_remessa['ITEM'] == sku]['QUANTIDADE'].sum()
         df_sku_filtrado = df_sku[(df_sku['COD_PRODUTO'] == sku) & (df_sku['DESC_UNID_MEDID'] == 'Caixa')]
-        if df_sku_filtrado.empty():
+        if df_sku_filtrado.empty:
             continue
 
         peso_por_caixa = df_sku_filtrado.iloc[0]['QTDE_PESO_LIQ']
@@ -47,23 +48,40 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_exp, df
         total_overweight = 0
         count_sp = 0
 
-        for _, row in df_pallets.iterrows():
-            lote = row['Lote']
-            data_producao = row['Data de produção']
-            hora_inicio = row['Hora criação'][:2] + ":00:00"
-            hora_fim = row['Hora modificação'][:2] + ":00:00"
+        for idx, row in df_pallets.iterrows():
+            try:
+                log_callback(f"Processando pallet {idx+1}/{len(df_pallets)}...")
 
-            linha_produzida = "L" + lote[-3:]
-            df_sp_filtro = df_sobrepeso[
-                (df_sobrepeso['Linhas'] == linha_produzida) &
-                (df_sobrepeso['DataHora'] >= f"{data_producao} {hora_inicio}") &
-                (df_sobrepeso['DataHora'] <= f"{data_producao} {hora_fim}")
-            ]
+                lote = row['Lote']
+                log_callback(f"Lote: {lote}")
+                
+                data_producao = row['Data de produção']
+                log_callback(f"Data produção: {data_producao}")
 
-            if not df_sp_filtro.empty:
-                media_sp = df_sp_filtro['Sobrepesohora'].mean()
-                total_overweight += media_sp
-                count_sp += 1
+                hora_inicio = f"{row['Hora de criação'].hour:02d}:00:00"
+                hora_fim = f"{row['Hora de modificação'].hour:02d}:00:00"
+                log_callback(f"Intervalo hora: {hora_inicio} - {hora_fim}")
+
+                linha_produzida = "L" + lote[-3:]
+                log_callback(f"Linha produzida: {linha_produzida}")
+
+                df_sp_filtro = df_sobrepeso[
+                    (df_sobrepeso['LINHA'] == linha_produzida) &
+                    (df_sobrepeso['Data e hora'] >= f"{data_producao} {hora_inicio}") &
+                    (df_sobrepeso['Data e hora'] <= f"{data_producao} {hora_fim}")
+                ]
+
+                log_callback(f"Linhas sobrepeso encontradas: {len(df_sp_filtro)}")
+
+                if not df_sp_filtro.empty:
+                    media_sp = df_sp_filtro['sobrepesohora'].mean() / 100
+                    log_callback(f"Média SP: {media_sp:.4f}")
+                    total_overweight += media_sp
+                    count_sp += 1
+
+            except Exception as e:
+                log_callback(f"Erro ao processar pallet {idx+1}: {e}")
+
 
         if count_sp > 0:
             sp_medio = total_overweight / count_sp
@@ -162,17 +180,17 @@ class App(ctk.CTk):
         try:
             self.log_text.clear()
             self.log_display.configure(text="")
-            file_path = os.path.expanduser("~/Desktop/SIMULADOR BALANÇA_3.0_1.xlsm")
+            file_path = os.path.join(download_dir,"SIMULADOR_BALANÇA_3.0_1.xlsm")
             self.add_log("Abrindo planilha Excel...")
 
             xl = pd.ExcelFile(file_path)
-            df_exp = xl.parse("data_exp")
-            df_sap = xl.parse("data_sap")
+            df_exp = xl.parse("dado_exp")
+            df_sap = xl.parse("dado_sap")
             df_sku = xl.parse("dado_sku")
             df_sobrepeso = xl.parse("dado_sobrepeso")
-            df_sobrepeso = df_sobrepeso[~df_sobrepeso['DataHora'].astype(str).str.contains("Redimensionar", na=False)]
-            df_sobrepeso['DataHora'] = pd.to_datetime(df_sobrepeso['DataHora'], errors='coerce')
-            df_sobrepeso = df_sobrepeso.dropna(subset=['DataHora'])
+            df_sobrepeso = df_sobrepeso[~df_sobrepeso['Data e hora'].astype(str).str.contains("Redimensionar", na=False)]
+            df_sobrepeso['Data e hora'] = pd.to_datetime(df_sobrepeso['Data e hora'], errors='coerce')
+            df_sobrepeso = df_sobrepeso.dropna(subset=['Data e hora'])
 
             peso_vazio = float(self.peso_vazio.get())
             qtd_paletes = int(self.qtd_paletes.get())
