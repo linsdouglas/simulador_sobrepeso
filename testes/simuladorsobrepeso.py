@@ -51,6 +51,38 @@ def criar_copia_planilha(fonte_dir, nome_arquivo, log_callback):
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
 
+def integrar_itens_detalhados(df_remessa, df_sap, df_sobrepeso, log_callback):
+    itens_detalhados = []
+
+    for _, row in df_remessa.iterrows():
+        sku = row['ITEM']
+        chave_pallet = row.get('CHAVE_PALETE', None)
+        sp = 0.0
+
+        if pd.notna(chave_pallet) and chave_pallet in df_sap['Chave Pallet'].values:
+            try:
+                lote_info = df_sap[df_sap['Chave Pallet'] == chave_pallet].iloc[0]
+                lote = lote_info['Lote']
+                data_producao = lote_info['Data de produção']
+                hora_inicio = f"{lote_info['Hora de criação'].hour:02d}:00:00"
+                hora_fim = f"{lote_info['Hora de modificação'].hour:02d}:00:00"
+                linha_produzida = "L" + lote[-3:]
+
+                df_sp_filtro = df_sobrepeso[
+                    (df_sobrepeso['LINHA'] == linha_produzida) &
+                    (df_sobrepeso['Data e hora'] >= f"{data_producao} {hora_inicio}") &
+                    (df_sobrepeso['Data e hora'] <= f"{data_producao} {hora_fim}")
+                ]
+
+                if not df_sp_filtro.empty:
+                    sp = df_sp_filtro['sobrepesohora'].mean() / 100
+            except Exception as e:
+                log_callback(f"Erro ao calcular SP para pallet {chave_pallet}: {e}")
+
+        itens_detalhados.append({'sku': sku, 'sp': sp})
+
+    return itens_detalhados
+
 def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_exp, df_sku, df_sap, df_sobrepeso, log_callback):
     try:
         remessa_num = int(remessa_num)
@@ -85,7 +117,6 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_exp, df
 
         total_overweight = 0
         count_sp = 0
-
         for idx, row in df_pallets.iterrows():
             try:
                 log_callback(f"Processando pallet {idx+1}/{len(df_pallets)}...")
@@ -139,8 +170,11 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_exp, df
     else:
         media_sp_geral = 0.0
     log_callback(f"Média geral de sobrepeso (entre {len(sobrepesos_por_item)} itens): {media_sp_geral:.4f}")
+    
+    itens_detalhados = integrar_itens_detalhados(df_remessa, df_sap, df_sobrepeso, log_callback)
 
-    return peso_base_total, sp_total, peso_com_sobrepeso, peso_total_com_paletes, media_sp_geral, sobrepesos_por_item
+    return peso_base_total, sp_total, peso_com_sobrepeso, peso_total_com_paletes, media_sp_geral, itens_detalhados
+
 
 def preencher_formulario_com_openpyxl(path_copia, dados, sobrepesos_por_item, log_callback):
     try:
@@ -166,11 +200,10 @@ def preencher_formulario_com_openpyxl(path_copia, dados, sobrepesos_por_item, lo
 
         linha = 12
         log_callback("Preenchendo SKUs e sobrepesos...")
-        for sku, sp in sobrepesos_por_item.items():
-            if pd.notna(sp):
-                ws[f"C{linha}"] = sku
-                ws[f"D{linha}"] = sp
-                linha += 1
+        for item in sobrepesos_por_item: 
+            ws[f"C{linha}"] = item['sku']
+            ws[f"D{linha}"] = item['sp']
+            linha += 1
 
         wb.save(path_copia)
         log_callback("Formulário preenchido e salvo com sucesso.")
@@ -298,7 +331,7 @@ class App(ctk.CTk):
             )
 
             if resultado:
-                peso_base, sp_total, peso_com_sp, peso_final, media_sp, sp_itens = resultado
+                peso_base, sp_total, peso_com_sp, peso_final, media_sp, itens_detalhados = resultado
 
                 dados = {
                     'remessa': remessa,
@@ -315,7 +348,7 @@ class App(ctk.CTk):
                 }
 
                 self.add_log("Chamando preenchimento do formulário via COM...")
-                preencher_formulario_com_openpyxl(file_path, dados, sp_itens, self.add_log)
+                preencher_formulario_com_openpyxl(file_path, dados, itens_detalhados, self.add_log)
 
                 self.add_log("Exportando PDF...")
                 pdf_path = exportar_pdf_com_comtypes(file_path, "FORMULARIO", nome_remessa=remessa, log_callback=self.add_log)
