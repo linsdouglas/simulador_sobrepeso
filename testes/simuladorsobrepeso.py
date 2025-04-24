@@ -34,6 +34,7 @@ MODELO_FORMULARIO = os.path.join(fonte_dir, "SIMULADOR_BALANÇA_LIMPO_2.xlsx")
 
 
 
+
 def criar_copia_planilha(fonte_dir, nome_arquivo, log_callback):
     try:
         origem = os.path.join(fonte_dir, nome_arquivo)
@@ -53,7 +54,7 @@ def criar_copia_planilha(fonte_dir, nome_arquivo, log_callback):
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
 
-def integrar_itens_detalhados(df_remessa, df_sap, df_sobrepeso, log_callback):
+def integrar_itens_detalhados(df_remessa, df_sap, df_sobrepeso_real, log_callback):
     itens_detalhados = []
 
     for _, row in df_remessa.iterrows():
@@ -68,24 +69,28 @@ def integrar_itens_detalhados(df_remessa, df_sap, df_sobrepeso, log_callback):
                 data_producao = lote_info['Data de produção']
                 hora_inicio = f"{lote_info['Hora de criação'].hour:02d}:00:00"
                 hora_fim = f"{lote_info['Hora de modificação'].hour:02d}:00:00"
-                linha_produzida = "L" + lote[-3:]
+                linha_coluna = "LB" + lote[-2:]  # Ex: LB01
 
-                df_sp_filtro = df_sobrepeso[
-                    (df_sobrepeso['LINHA'] == linha_produzida) &
-                    (df_sobrepeso['Data e hora'] >= f"{data_producao} {hora_inicio}") &
-                    (df_sobrepeso['Data e hora'] <= f"{data_producao} {hora_fim}")
+                df_sp_filtro = df_sobrepeso_real[
+                    (df_sobrepeso_real['DataHora'] >= pd.to_datetime(f"{data_producao} {hora_inicio}")) &
+                    (df_sobrepeso_real['DataHora'] <= pd.to_datetime(f"{data_producao} {hora_fim}"))
                 ]
 
-                if not df_sp_filtro.empty:
-                    sp = df_sp_filtro['sobrepesohora'].mean() / 100
+                if linha_coluna in df_sp_filtro.columns:
+                    sp_valores = df_sp_filtro[linha_coluna].fillna(0)
+                    if not sp_valores.empty:
+                        media_sp = sp_valores.mean() / 100
+                        log_callback(f"[{linha_coluna}] Média SP para SKU {sku}: {media_sp:.4f}")
+                        sp = media_sp
+
             except Exception as e:
                 log_callback(f"Erro ao calcular SP para pallet {chave_pallet}: {e}")
 
-        itens_detalhados.append({'sku': sku, 'sp': sp})
+        itens_detalhados.append({'sku': sku, 'sp': round(sp, 4)})
 
     return itens_detalhados
 
-def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_exp, df_sku, df_sap, df_sobrepeso, log_callback):
+def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_exp, df_sku, df_sap, df_sobrepeso_real, log_callback):
     try:
         remessa_num = int(remessa_num)
     except ValueError:
@@ -137,24 +142,32 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_exp, df
                 hora_fim = f"{row['Hora de modificação'].hour:02d}:00:00"
                 log_callback(f"Intervalo hora: {hora_inicio} - {hora_fim}")
 
-                linha_produzida = "L" + lote[-3:]
-                log_callback(f"Linha produzida: {linha_produzida}")
-
-                df_sp_filtro = df_sobrepeso[
-                    (df_sobrepeso['LINHA'] == linha_produzida) &
-                    (df_sobrepeso['Data e hora'] >= f"{data_producao} {hora_inicio}") &
-                    (df_sobrepeso['Data e hora'] <= f"{data_producao} {hora_fim}")
+                linha_coluna = "LB" + lote[-2:]
+                log_callback(f"Linha produzida: {linha_coluna}")
+                df_sp_filtro = df_sobrepeso_real[
+                    (df_sobrepeso_real['DataHora'] >= pd.to_datetime(f"{data_producao} {hora_inicio}")) &
+                    (df_sobrepeso_real['DataHora'] <= pd.to_datetime(f"{data_producao} {hora_fim}"))
                 ]
 
-                log_callback(f"Linhas sobrepeso encontradas: {len(df_sp_filtro)}")
+                if linha_coluna in df_sp_filtro.columns:
+                    sp_valores = df_sp_filtro[linha_coluna].fillna(0)
+                    if not sp_valores.empty:
+                        media_sp = sp_valores.mean() / 100
 
-                if not df_sp_filtro.empty:
-                    media_sp = df_sp_filtro['sobrepesohora'].mean() / 100
-                    log_callback(f"Média SP: {media_sp:.4f}")
-                    ajuste = peso_base_liq * media_sp
-                    log_callback(f"Ajuste aplicado ao peso base ({peso_base:.2f}): {ajuste:.2f}kg")
-                    total_overweight += media_sp
-                    count_sp += 1
+                log_callback(f"Linhas sobrepeso encontradas: {len(df_sp_filtro)}")  
+
+                if linha_coluna in df_sp_filtro.columns:
+                    sp_valores = df_sp_filtro[linha_coluna].fillna(0)
+                    if not sp_valores.empty:
+                        media_sp = sp_valores.mean() / 100
+                        log_callback(f"[{linha_coluna}] Média SP: {media_sp:.4f}")
+                        ajuste = peso_base_liq * media_sp
+                        log_callback(f"Ajuste aplicado ao peso base ({peso_base_liq:.2f}): {ajuste:.2f}kg")
+                        total_overweight += media_sp
+                        count_sp += 1
+                else:
+                    log_callback(f"[AVISO] Coluna {linha_coluna} não encontrada na base de sobrepeso.")
+
 
             except Exception as e:
                 log_callback(f"Erro ao processar pallet {idx+1}: {e}")
@@ -177,7 +190,7 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_exp, df
         media_sp_geral = 0.0
     log_callback(f"Média geral de sobrepeso (entre {len(sobrepesos_por_item)} itens): {media_sp_geral:.4f}")
     
-    itens_detalhados = integrar_itens_detalhados(df_remessa, df_sap, df_sobrepeso, log_callback)
+    itens_detalhados = integrar_itens_detalhados(df_remessa, df_sap, df_sobrepeso_real, log_callback)
 
     return peso_base_total, sp_total, peso_com_sobrepeso, peso_total_com_paletes, media_sp_geral, itens_detalhados
 
@@ -305,6 +318,9 @@ class App(ctk.CTk):
         self.log_display.configure(text="\n".join(self.log_text[-10:]))
 
     def processar(self):
+        path_base_sobrepeso = os.path.join(fonte_dir, "Base_sobrepeso_real.xlsx")
+        df_sobrepeso_real = pd.read_excel(path_base_sobrepeso, sheet_name="SOBREPESO")
+        df_sobrepeso_real['DataHora'] = pd.to_datetime(df_sobrepeso_real['DataHora'])
         try:
             self.log_text.clear()
             self.log_display.configure(text="")
@@ -316,13 +332,7 @@ class App(ctk.CTk):
             df_exp = xl.parse("dado_exp")
             df_sap = xl.parse("dado_sap")
             df_sku = xl.parse("dado_sku")
-            df_sobrepeso = xl.parse("dado_sobrepeso")
             self.add_log("Abas carregadas com sucesso.")
-
-            df_sobrepeso = df_sobrepeso[~df_sobrepeso['Data e hora'].astype(str).str.contains("Redimensionar", na=False)]
-            df_sobrepeso['Data e hora'] = pd.to_datetime(df_sobrepeso['Data e hora'], errors='coerce')
-            df_sobrepeso = df_sobrepeso.dropna(subset=['Data e hora'])
-            self.add_log("Pré-processamento do sobrepeso finalizado.")
 
             peso_vazio = float(self.peso_vazio.get())
             qtd_paletes = int(self.qtd_paletes.get())
@@ -332,7 +342,7 @@ class App(ctk.CTk):
             self.add_log("Iniciando cálculo do peso final...")
             resultado = calcular_peso_final(
                 remessa, peso_vazio, qtd_paletes,
-                df_exp, df_sku, df_sap, df_sobrepeso,
+                df_exp, df_sku, df_sap, df_sobrepeso_real,
                 self.add_log
             )
 
