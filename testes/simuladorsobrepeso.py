@@ -110,9 +110,12 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_exp, df
         if df_sku_filtrado.empty:
             continue
 
-        peso_por_caixa = df_sku_filtrado.iloc[0]['QTDE_PESO_LIQ']
-        peso_base = qtd_caixas * peso_por_caixa
+        peso_por_caixa_bruto = df_sku_filtrado.iloc[0]['QTDE_PESO_BRU']
+        peso_por_caixa_liquido = df_sku_filtrado.iloc[0]['QTDE_PESO_LIQ']
+        peso_base_liq=qtd_caixas * peso_por_caixa_liquido
+        peso_base = qtd_caixas * peso_por_caixa_bruto
         peso_base_total += peso_base
+        peso_base_total_liq += peso_base_liq
 
         chaves_pallet = df_remessa[df_remessa['ITEM'] == sku]['CHAVE_PALETE'].unique()
         df_pallets = df_sap[df_sap['Chave Pallet'].isin(chaves_pallet)]
@@ -147,7 +150,7 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_exp, df
                 if not df_sp_filtro.empty:
                     media_sp = df_sp_filtro['sobrepesohora'].mean() / 100
                     log_callback(f"Média SP: {media_sp:.4f}")
-                    ajuste = peso_base * media_sp
+                    ajuste = peso_base_liq * media_sp
                     log_callback(f"Ajuste aplicado ao peso base ({peso_base:.2f}): {ajuste:.2f}kg")
                     total_overweight += media_sp
                     count_sp += 1
@@ -159,13 +162,13 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_exp, df
         if count_sp > 0:
             sp_medio = total_overweight / count_sp
             sobrepesos_por_item[sku] = sp_medio
-            sp_total_ajuste = peso_base * sp_medio
+            sp_total_ajuste = peso_base_liq * sp_medio
             log_callback(f"Total SP médio do SKU {sku}: {sp_medio:.4f}, ajuste total: {sp_total_ajuste:.2f}kg")
             sp_total += sp_total_ajuste
 
     peso_com_sobrepeso = peso_base_total + sp_total
     log_callback(f"Peso com sobrepeso: {peso_com_sobrepeso:.2f} kg")
-    peso_total_com_paletes = peso_com_sobrepeso + (qtd_paletes * 26)
+    peso_total_com_paletes = peso_com_sobrepeso + (qtd_paletes * 26) + peso_veiculo_vazio
     log_callback(f"Peso total com paletes ({qtd_paletes} x 26kg): {peso_total_com_paletes:.2f} kg")
     if sobrepesos_por_item:
         media_sp_geral = sum(sobrepesos_por_item.values()) / len(sobrepesos_por_item)
