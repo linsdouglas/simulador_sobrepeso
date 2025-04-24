@@ -4,7 +4,7 @@ from datetime import datetime
 import win32com.client as win32
 from pandas.errors import OutOfBoundsDatetime
 
-print("[INÍCIO] Script iniciado.")
+print("Script iniciado.")
 
 dados_raw = r"C:\Users\xql80316\Downloads\SOBREPESOPOR HORA2.xlsx"
 
@@ -18,7 +18,7 @@ def encontrar_pasta_onedrive_empresa():
             if os.path.isdir(caminho_completo) and "Gestão de Estoque - Documentos" in os.listdir(caminho_completo):
                 print(f"[OK] Pasta encontrada: {caminho_completo}")
                 return os.path.join(caminho_completo, "Gestão de Estoque - Documentos")
-    print("[ERRO] Pasta não encontrada.")
+    print("Pasta não encontrada.")
     return None
 
 fonte_dir = encontrar_pasta_onedrive_empresa()
@@ -27,18 +27,18 @@ if not fonte_dir:
 
 base_sobrepeso = os.path.join(fonte_dir, "Base_sobrepeso_real.xlsx")
 
-print("[INFO] Inicializando Excel via COM...")
+print("Inicializando Excel via COM...")
 excel = win32.gencache.EnsureDispatch('Excel.Application')
 excel.Visible = False
 
-print("[INFO] Abrindo planilha de dados brutos...")
+print("Abrindo planilha de dados brutos...")
 wb = excel.Workbooks.Open(dados_raw)
 
-print("[INFO] Selecionando planilhas...")
+print("Selecionando planilhas...")
 ws_tags = wb.Sheets("Planilha5")        
 ws_dados = wb.Sheets("Planilha3")
 
-print("[INFO] Coletando tags das linhas de produção...")
+print("Coletando tags das linhas de produção...")
 linhas_tags = []
 for i in range(2, 24):
     linha_nome = ws_tags.Cells(i, 1).Value
@@ -73,11 +73,11 @@ for idx, (linha_nome, tag) in enumerate(linhas_tags, 1):
         row += 1
     print(f"    > {row - 4} registros coletados para {linha_nome}.")
 
-print("[INFO] Finalizando e fechando Excel...")
+print("Finalizando e fechando Excel...")
 wb.Close(False)
 excel.Quit()
 
-print("[INFO] Convertendo para DataFrame e ordenando...")
+print("Convertendo para DataFrame e ordenando...")
 dados_normalizados = {}
 for k, v in dados.items():
     try:
@@ -92,8 +92,8 @@ df_final.index.name = "DataHora"
 df_final = df_final.sort_index()
 
 
-print("[INFO] Salvando dados na planilha destino no SharePoint...")
+print("Salvando dados na planilha destino no SharePoint...")
 with pd.ExcelWriter(base_sobrepeso, engine="openpyxl", mode='a', if_sheet_exists='overlay') as writer:
     df_final.to_excel(writer, sheet_name="SOBREPESO", startrow=0, startcol=0)
 
-print("[FIM] Atualização concluída com sucesso!")
+print("Atualização concluída com sucesso!")
