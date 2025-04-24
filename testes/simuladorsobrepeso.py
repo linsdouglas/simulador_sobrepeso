@@ -101,6 +101,7 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_exp, df
     qtd_caixas_total = df_remessa['QUANTIDADE'].sum()
 
     peso_base_total = 0
+    peso_base_total_liq = 0
     sobrepesos_por_item = {}
     sp_total = 0
 
