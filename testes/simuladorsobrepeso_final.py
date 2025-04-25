@@ -309,7 +309,7 @@ def gerar_relatorio_diferenca(remessa_num, peso_final_balança, peso_veiculo_vaz
     df_dados = pd.DataFrame(dados_relatorio)
 
     # Cálculo da diferença
-    diferenca_total = peso_final_balança - peso_estimado_total
+    diferenca_total = diferenca_total = (peso_estimado_total + peso_veiculo_vazio) - peso_final_balança
     peso_carga_real = peso_final_balança - peso_veiculo_vazio
     df_dados['% Peso'] = df_dados['Peso Total Líquido'] / peso_base_total_liq
     df_dados['Peso Proporcional Real'] = df_dados['% Peso'] * peso_carga_real
