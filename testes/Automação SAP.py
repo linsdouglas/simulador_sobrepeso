@@ -33,6 +33,21 @@ base_sap="base_sap"
 download_dir = os.path.join(os.environ['USERPROFILE'], 'Downloads', base_sap)
 if not os.path.exists(download_dir):
     os.makedirs(download_dir)
+
+def encontrar_pasta_onedrive_empresa():
+    user_dir = os.environ["USERPROFILE"]
+    possiveis = os.listdir(user_dir)
+    for nome in possiveis:
+        if "DIAS BRANCO" in nome.upper():
+            caminho_completo = os.path.join(user_dir, nome)
+            if os.path.isdir(caminho_completo) and "Gestão de Estoque - Documentos" in os.listdir(caminho_completo):
+                return os.path.join(caminho_completo, "Gestão de Estoque - Documentos")
+    return None
+
+fonte_dir = encontrar_pasta_onedrive_empresa()
+if not fonte_dir:
+    raise FileNotFoundError("Não foi possível localizar a pasta sincronizada do SharePoint via OneDrive.")
+
 url = "https://s4.mdiasbranco.com.br:44380/sap/bc/gui/sap/its/webgui#"
 chrome_options = webdriver.ChromeOptions()
 #chrome_options.debugger_address = "localhost:9222"
@@ -165,33 +180,38 @@ def safe_click(driver, by_locator,nome_elemento="Elemento", timeout=10):
     except Exception as e:
         print(f"Erro inesperado ao tentar clicar: {repr(e)}")
 
-def envio_sap_api():
-    arquivo = os.path.join(download_dir, "EXPORT.XLSX")
-    
-    if not os.path.exists(arquivo):
-        print("Arquivo EXPORT.XLSX não encontrado. Cancelando envio.")
-        return
+def envio_base_sap():
+    try:
+        caminho_export = os.path.join(download_dir, "EXPORT.XLSX")
+        if not os.path.exists(caminho_export):
+            print("Arquivo EXPORT.XLSX não encontrado.")
+            return
+        caminho_base = os.path.join(fonte_dir, "base_sap.xlsx")
+        df_export = pd.read_excel(caminho_export)
+        df_export_sem_cabecalho = df_export.iloc[1:].reset_index(drop=True)
+        wb = load_workbook(caminho_base)
+        ws = wb["dado_sap"]
+        ultima_linha = ws.max_row + 1
+        for i, row in df_export_sem_cabecalho.iterrows():
+            for j, value in enumerate(row):
+                ws.cell(row=ultima_linha + i, column=j + 1, value=value)
 
-    df = pd.read_excel(arquivo)
-
-    for col in df.columns:
-        df[col] = df[col].apply(lambda x: x.strftime("%H:%M:%S") if isinstance(x, datetime.time) else x)
-        
-    if 'DATA' in df.columns:
-        df['DATA'] = pd.to_datetime(df['DATA']).dt.strftime('%Y-%m-%d')
-    json_data = df.to_dict(orient='records')
-    url = "https://simuladorsobrepesovitarella.com/balanca/api/upload_sap/"
-    headers = {"Content-Type": "application/json"}
-    response = requests.post(url, json=json_data, headers=headers)
-
-    print("Status:", response.status_code)
-    print("Resposta:", response.text)
+        wb.save(caminho_base)
+        wb.close()
+        print("Dados colados com sucesso na base_sap.xlsx.")
+    except Exception as e:
+        print(f"Erro ao colar os dados na base SAP: {e}")
+    try:
+        os.remove(caminho_export)
+        print(f"relatório mais recente apagado")
+    except Exception as e:
+        print(f"erro ao apagar arquivo relatório sap mais recente")
 
 
 if __name__ == "__main__":
     login_sap()
     actions = ActionChains(driver)
     interacoes_sap(driver, actions)
-    envio_sap_api()
+    envio_base_sap()
     driver.quit()
 
