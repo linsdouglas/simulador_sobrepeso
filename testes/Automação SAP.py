@@ -1,7 +1,7 @@
 #Automação SAP
 import time
 import math
-import  datetime
+from datetime import datetime, timedelta, date
 import threading
 import tkinter as tk
 from tkinter import messagebox, scrolledtext
@@ -46,6 +46,8 @@ def encontrar_pasta_onedrive_empresa():
     return None
 
 fonte_dir = encontrar_pasta_onedrive_empresa()
+caminho_base = os.path.join(fonte_dir, "base_sap.xlsx")
+
 if not fonte_dir:
     raise FileNotFoundError("Não foi possível localizar a pasta sincronizada do SharePoint via OneDrive.")
 
@@ -197,22 +199,20 @@ def aguardar_download_final(nome_base="EXPORT", timeout=30):
             return True
         time.sleep(1)
     return False
-
+caminho_export = encontrar_arquivo_export()
 def envio_base_sap():
     try:
-        caminho_export = encontrar_arquivo_export()
-        if not caminho_export or not os.path.exists(caminho_export):
-            print("Arquivo EXPORT.XLSX não encontrado ou ainda não foi salvo completamente.")
+        if not os.path.exists(caminho_export):
+            print("Arquivo EXPORT_TESTE.xlsx não encontrado.")
             return
 
-        caminho_base = os.path.join(fonte_dir, "base_sap.xlsx")
         if not os.path.exists(caminho_base):
-            print("Arquivo base_sap.xlsx não encontrado no OneDrive.")
+            print("Arquivo base_sap.xlsx não encontrado.")
             return
 
         df_novos = pd.read_excel(caminho_export)
-        df_novos = df_novos.iloc[1:].reset_index(drop=True)
-        if "CHAVE_PALLET" not in df_novos.columns:
+        df_novos = df_novos.iloc[1:].reset_index(drop=True)  
+        if "Chave Pallet" not in df_novos.columns:
             print("Coluna 'CHAVE_PALLET' não encontrada no arquivo exportado.")
             return
 
@@ -220,14 +220,14 @@ def envio_base_sap():
         ws = wb["dado_sap"]
 
         colunas_base = [cell.value for cell in ws[1]]
-        if "CHAVE_PALLET" not in colunas_base or "DATA_ENTRADA" not in colunas_base:
+        if "Chave Pallet" not in colunas_base or "Data de entrada" not in colunas_base:
             print("Coluna 'CHAVE_PALLET' ou 'DATA_ENTRADA' não encontrada na planilha base.")
             return
 
-        idx_chave = colunas_base.index("CHAVE_PALLET") + 1
-        idx_data = colunas_base.index("DATA_ENTRADA") + 1
+        idx_chave = colunas_base.index("Chave Pallet") + 1
+        idx_data = colunas_base.index("Data de entrada") + 1
 
-        data_limite = (datetime.today() - datetime.timedelta(days=60))
+        data_limite = (datetime.today() - timedelta(days=60)).date()
         linhas_para_apagar = []
 
         for i, row in enumerate(ws.iter_rows(min_row=2, max_row=ws.max_row), start=2):
@@ -241,13 +241,15 @@ def envio_base_sap():
             ws.delete_rows(linha - offset)
 
         print(f"{len(linhas_para_apagar)} linhas com DATA_ENTRADA = {data_limite.strftime('%d/%m/%Y')} foram removidas.")
+
         chaves_existentes = set()
         for row in ws.iter_rows(min_row=2, max_col=idx_chave):
             valor = row[idx_chave - 1].value
             if valor:
                 chaves_existentes.add(str(valor))
 
-        df_filtrado = df_novos[~df_novos["CHAVE_PALLET"].astype(str).isin(chaves_existentes)]
+
+        df_filtrado = df_novos[~df_novos["Chave Pallet"].astype(str).isin(chaves_existentes)]
         if df_filtrado.empty:
             print("Nenhum novo registro a ser inserido.")
             wb.save(caminho_base)
@@ -271,7 +273,7 @@ def envio_base_sap():
                             pass
 
                 celula = ws.cell(row=linha_inicio + i, column=j + 1, value=value)
-                if isinstance(value, datetime.date):
+                if isinstance(value, date):
                     celula.number_format = "DD/MM/YYYY"
 
         wb.save(caminho_base)
