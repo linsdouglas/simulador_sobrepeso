@@ -180,9 +180,25 @@ def safe_click(driver, by_locator,nome_elemento="Elemento", timeout=10):
     except Exception as e:
         print(f"Erro inesperado ao tentar clicar: {repr(e)}")
 
+def encontrar_arquivo_export():
+    arquivos = glob.glob(os.path.join(download_dir, "EXPORT*.XLSX"))
+    if not arquivos:
+        return None
+    arquivos.sort(key=os.path.getmtime, reverse=True)
+    return arquivos[0]
+
+def aguardar_download_final(nome_base="EXPORT", timeout=30):
+    tempo_inicial = time.time()
+    while time.time() - tempo_inicial < timeout:
+        arquivos = glob.glob(os.path.join(download_dir, f"{nome_base}*.XLSX"))
+        if arquivos and all(not a.endswith(".crdownload") for a in arquivos):
+            return True
+        time.sleep(1)
+    return False
+
 def envio_base_sap():
     try:
-        caminho_export = os.path.join(download_dir, "EXPORT.XLSX")
+        caminho_export = encontrar_arquivo_export()
         if not os.path.exists(caminho_export):
             print("Arquivo EXPORT.XLSX não encontrado.")
             return
@@ -212,6 +228,7 @@ if __name__ == "__main__":
     login_sap()
     actions = ActionChains(driver)
     interacoes_sap(driver, actions)
+    aguardar_download_final
     envio_base_sap()
     driver.quit()
 

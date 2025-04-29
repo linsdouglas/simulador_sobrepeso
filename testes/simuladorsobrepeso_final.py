@@ -18,6 +18,7 @@ import pandas as pd
 import numpy as np
 import os
 import threading
+import glob
 
 def encontrar_pasta_onedrive_empresa():
     user_dir = os.environ["USERPROFILE"]
