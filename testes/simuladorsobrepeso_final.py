@@ -85,14 +85,14 @@ def integrar_itens_detalhados(df_remessa, df_sap, df_sobrepeso_real, log_callbac
 
     return itens_detalhados
 
-def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_exp, df_sku, df_sap, df_sobrepeso_real, log_callback):
+def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedicao, df_sku, df_sap, df_sobrepeso_real, log_callback):
     try:
         remessa_num = int(remessa_num)
     except ValueError:
         log_callback("Remessa inválida.")
         return None
 
-    df_remessa = df_exp[df_exp['REMESSA'] == remessa_num]
+    df_remessa = df_expedicao[df_expedicao['REMESSA'] == remessa_num]
     if df_remessa.empty:
         log_callback("Remessa não encontrada em data_exp.")
         return None
@@ -248,7 +248,7 @@ def exportar_pdf_com_comtypes(path_xlsx, aba_nome="FORMULARIO", nome_remessa="RE
 
         ws = wb.Worksheets(aba_nome)
 
-        pdf_dir = "C:\\temp"
+        pdf_dir = os.path.join(fonte_dir, 'Relatório_Saida')
         os.makedirs(pdf_dir, exist_ok=True)
 
         pdf_path = os.path.join(pdf_dir, f"SOBREPESOSIMULADO - {nome_remessa}.pdf")
@@ -277,11 +277,9 @@ def gerar_relatorio_diferenca(remessa_num, peso_final_balança, peso_veiculo_vaz
     from matplotlib.backends.backend_pdf import PdfPages
     import pandas as pd
 
-    # Criar pasta de destino
     pasta_destino = os.path.join(pasta_excel, 'Analise_divergencia')
     os.makedirs(pasta_destino, exist_ok=True)
 
-    # Preparar dados da remessa
     skus = df_remessa['ITEM'].unique()
     dados_relatorio = []
     peso_base_total_liq = 0
@@ -308,7 +306,6 @@ def gerar_relatorio_diferenca(remessa_num, peso_final_balança, peso_veiculo_vaz
 
     df_dados = pd.DataFrame(dados_relatorio)
 
-    # Cálculo da diferença
     diferenca_total = diferenca_total = (peso_estimado_total + peso_veiculo_vazio) - peso_final_balança
     peso_carga_real = peso_final_balança - peso_veiculo_vazio
     df_dados['% Peso'] = df_dados['Peso Total Líquido'] / peso_base_total_liq
@@ -317,11 +314,9 @@ def gerar_relatorio_diferenca(remessa_num, peso_final_balança, peso_veiculo_vaz
     df_dados['Diferença Estimada (kg)'] = df_dados['% Peso'] * diferenca_total
     df_dados['Unid. Estimada de Divergência'] = df_dados['Quantidade Real Estimada'] - df_dados['Quantidade']
 
-    # Nome do PDF
     nome_pdf = f"Análise quantitativa - {remessa_num}.pdf"
     caminho_pdf = os.path.join(pasta_destino, nome_pdf)
 
-    # Criar gráfico de quantidades esperadas vs ajustadas
     fig, ax = plt.subplots(figsize=(10, 6))
     largura_barra = 0.35
     x = range(len(df_dados))
@@ -340,14 +335,11 @@ def gerar_relatorio_diferenca(remessa_num, peso_final_balança, peso_veiculo_vaz
     ax.axhline(0, color='gray', linestyle='--')
     ax.legend()
 
-    # Adicionar texto nas barras
     for i in x:
         ax.text(i - largura_barra/2, qtd_esperada.iloc[i], f"{qtd_esperada.iloc[i]:.0f}", ha='center', va='bottom')
         ax.text(i + largura_barra/2, qtd_real.iloc[i], f"{qtd_real.iloc[i]:.0f}", ha='center', va='bottom')
 
-    # Gerar PDF com tabela + gráfico
     with PdfPages(caminho_pdf) as pdf:
-        # Página 1 – Tabela
         fig_tabela, ax_tabela = plt.subplots(figsize=(12, len(df_dados) * 0.5 + 3))
         ax_tabela.axis('off')
         table_data = [
@@ -362,8 +354,6 @@ def gerar_relatorio_diferenca(remessa_num, peso_final_balança, peso_veiculo_vaz
         titulo = f"Relatório Comparativo - Remessa {remessa_num}\nPeso estimado: {peso_estimado_total:.2f} kg | Peso balança: {peso_final_balança:.2f} kg | Peso veículo: {peso_veiculo_vazio:.2f} kg | Diferença: {diferenca_total:.2f} kg"
         fig_tabela.suptitle(titulo, fontsize=12)
         pdf.savefig(fig_tabela, bbox_inches='tight')
-
-        # Página 2 – Gráfico
         pdf.savefig(fig, bbox_inches='tight')
 
     plt.close('all')
@@ -423,6 +413,10 @@ class App(ctk.CTk):
 
     def processar(self):
         path_base_sobrepeso = os.path.join(fonte_dir, "Base_sobrepeso_real.xlsx")
+        path_base_expedicao = os.path.join(fonte_dir, "expedicao.xlsx")
+        path_base_sap = os.path.join(fonte_dir, "base_sap.xlsx")
+        df_sap = pd.read_excel(path_base_sap, sheet_name="dado_sap")
+        df_expedicao = pd.read_excel(path_base_expedicao, sheet_name="dado_exp")
         df_sobrepeso_real = pd.read_excel(path_base_sobrepeso, sheet_name="SOBREPESO")
         df_sobrepeso_real['DataHora'] = pd.to_datetime(df_sobrepeso_real['DataHora'])
 
@@ -435,8 +429,6 @@ class App(ctk.CTk):
 
             xl = pd.ExcelFile(file_path)
             self.add_log("Lendo abas do arquivo...")
-            df_exp = xl.parse("dado_exp")
-            df_sap = xl.parse("dado_sap")
             df_sku = xl.parse("dado_sku")
             self.add_log("Abas carregadas com sucesso.")
 
@@ -450,7 +442,7 @@ class App(ctk.CTk):
             self.add_log("Iniciando cálculo do peso final...")
             resultado = calcular_peso_final(
                 remessa, peso_vazio, qtd_paletes,
-                df_exp, df_sku, df_sap, df_sobrepeso_real,
+                df_expedicao, df_sku, df_sap, df_sobrepeso_real,
                 self.add_log
             )
 
@@ -459,7 +451,7 @@ class App(ctk.CTk):
 
                 dados = {
                     'remessa': remessa,
-                    'qtd_skus': df_exp[df_exp['REMESSA'] == remessa]['ITEM'].nunique(),
+                    'qtd_skus': df_expedicao[df_expedicao['REMESSA'] == remessa]['ITEM'].nunique(),
                     'placa': self.placa.get(),
                     'turno': self.turno.get(),
                     'peso_vazio': peso_vazio,
@@ -483,7 +475,7 @@ class App(ctk.CTk):
                     remessa_num=remessa,
                     peso_final_balança=peso_balança,
                     peso_veiculo_vazio=peso_vazio,
-                    df_remessa=df_exp[df_exp['REMESSA'] == remessa],
+                    df_remessa=df_expedicao[df_expedicao['REMESSA'] == remessa],
                     df_sku=df_sku,
                     peso_estimado_total=peso_com_sp,
                     pasta_excel=fonte_dir
