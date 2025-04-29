@@ -428,7 +428,7 @@ class App(ctk.CTk):
             self.add_log(f"Abrindo planilha Excel em: {file_path}")
 
             xl = pd.ExcelFile(file_path)
-            self.add_log("Lendo abas do arquivo...")
+            self.add_log("Lendo abas do arquivos...")
             df_sku = xl.parse("dado_sku")
             self.add_log("Abas carregadas com sucesso.")
 
@@ -486,10 +486,16 @@ class App(ctk.CTk):
                     "Sucesso",
                     f"Formulário exportado: {pdf_path}\n\nRelatório de divergência salvo:\n{relatorio_path}"
                 )
+                try:
+                    os.remove(file_path)
+                    self.add_log(f"Cópia temporária removida: {file_path}")
+                except Exception as e:
+                    self.add_log(f"Erro ao remover a cópia temporária: {e}")
 
             else:
                 self.add_log("Falha no cálculo. Verifique os dados inseridos.")
                 messagebox.showwarning("Aviso", "Cálculo não pôde ser realizado.")
+
 
         except Exception as e:
             self.add_log(f"Erro: {str(e)}")
