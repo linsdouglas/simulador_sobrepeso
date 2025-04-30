@@ -2,6 +2,7 @@
 import time
 import math
 from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date
 import threading
 import tkinter as tk
 from tkinter import messagebox, scrolledtext
@@ -47,6 +48,8 @@ def encontrar_pasta_onedrive_empresa():
     return None
 
 fonte_dir = encontrar_pasta_onedrive_empresa()
+caminho_base = os.path.join(fonte_dir, "base_sap.xlsx")
+
 if not fonte_dir:
     raise FileNotFoundError("Não foi possível localizar a pasta sincronizada do SharePoint via OneDrive.")
 
@@ -198,17 +201,15 @@ def aguardar_download_final(nome_base="EXPORT", timeout=30):
             return True
         time.sleep(1)
     return False
-
+caminho_export = encontrar_arquivo_export()
 def envio_base_sap():
     try:
-        caminho_export = encontrar_arquivo_export()
-        if not caminho_export or not os.path.exists(caminho_export):
-            print("Arquivo EXPORT.XLSX não encontrado ou ainda não foi salvo completamente.")
+        if not os.path.exists(caminho_export):
+            print("Arquivo EXPORT_TESTE.xlsx não encontrado.")
             return
 
-        caminho_base = os.path.join(fonte_dir, "base_sap.xlsx")
         if not os.path.exists(caminho_base):
-            print("Arquivo base_sap.xlsx não encontrado no OneDrive.")
+            print("Arquivo base_sap.xlsx não encontrado.")
             return
 
         df_novos = pd.read_excel(caminho_export)
@@ -227,7 +228,10 @@ def envio_base_sap():
 
         idx_chave = colunas_base.index("Chave Pallet") + 1
         idx_data = colunas_base.index("Data de entrada") + 1
+        idx_chave = colunas_base.index("Chave Pallet") + 1
+        idx_data = colunas_base.index("Data de entrada") + 1
 
+        data_limite = (datetime.today() - timedelta(days=60)).date()
         data_limite = (datetime.today() - timedelta(days=60)).date()
         linhas_para_apagar = []
 
