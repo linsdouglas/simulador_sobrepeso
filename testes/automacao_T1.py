@@ -57,8 +57,11 @@ def executar_processo(mapa_frete_path, mes_usuario, log_callback):
             except Exception as e:
                 log_callback(f"Aviso: erro ao atualizar pivô na aba {ws.Name} - {str(e)}")
 
-        consol_wb.Sheets("Link Real T1").Range("C3:P2299").Copy()
-        simulador_wb.Sheets("Base Transf Real").Range("E3").PasteSpecial(Paste=-4104)
+        simulador_wb.Sheets("Base Transf Real").Range("E3:T2299").ClearContents()
+        source_range = consol_wb.Sheets("Link Real T1").Range("A3:P2299")
+        dest_range = simulador_wb.Sheets("Base Transf Real").Range("E3:T2299")
+        dest_range.ClearContents()
+        dest_range.Value = source_range.Value
 
         log_callback("Atualizando pivôs do simulador...")
         for ws in simulador_wb.Sheets:
@@ -129,7 +132,7 @@ class App(ctk.CTk):
         self.log_box.see("end")
 
     def iniciar_processo(self):
-        mapa = self.mapa_path.get()
+        mapa = self.mapa_path.get() 
         mes = self.mes_usuario.get()
 
         if not mapa or not os.path.isfile(mapa):
