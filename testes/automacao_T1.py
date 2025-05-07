@@ -10,8 +10,6 @@ import threading
 import traceback
 import time
 
-
-
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
@@ -24,7 +22,7 @@ def executar_processo(mapa_frete_path, mes_usuario, log_callback):
         print("iniciando processo")
 
         consol_path = os.path.join(download_dir,"Consol.xlsx")
-        simulador_path = os.path.join(download_dir,"Simulador_T1_FINAL.xlsx")
+        simulador_path = os.path.join(download_dir,"Simulador T1_AA_Mar v.2.xlsx")
         dashboard_path = os.path.join(download_dir,"DASHBOARD_FRETE.xlsx")
 
         excel = win32.gencache.EnsureDispatch('Excel.Application')

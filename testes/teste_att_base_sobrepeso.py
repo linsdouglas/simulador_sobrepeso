@@ -3,6 +3,13 @@ import pandas as pd
 from datetime import datetime
 import win32com.client as win32
 from pandas.errors import OutOfBoundsDatetime
+import win32com.client.gencache
+import shutil
+import os
+folder = win32com.client.gencache.GetGeneratePath()
+shutil.rmtree(folder, ignore_errors=True)
+win32com.client.gencache.EnsureDispatch("Excel.Application")
+
 
 print("Script iniciado.")
 
