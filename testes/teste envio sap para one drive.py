@@ -24,53 +24,68 @@ if not fonte_dir:
     raise FileNotFoundError("Não foi possível localizar a pasta sincronizada do SharePoint via OneDrive.")
 
 def envio_base_sap_teste():
+    print("[INÍCIO] Script de envio base SAP iniciado.")
     try:
         if not os.path.exists(caminho_export):
             print("Arquivo EXPORT_TESTE.xlsx não encontrado.")
             return
+        else:
+            print("Arquivo exportado encontrado.")
 
         if not os.path.exists(caminho_base):
             print("Arquivo base_sap.xlsx não encontrado.")
             return
+        else:
+            print("Diretório no OneDrive da base SAP encontrado.")
 
         df_novos = pd.read_excel(caminho_export)
-        df_novos = df_novos.iloc[1:].reset_index(drop=True)  
+        print("Leitura do Excel feita com sucesso.")
+        df_novos = df_novos.iloc[1:].reset_index(drop=True)
+
         if "Chave Pallet" not in df_novos.columns:
-            print("Coluna 'CHAVE_PALLET' não encontrada no arquivo exportado.")
+            print("Coluna 'Chave Pallet' não encontrada no arquivo exportado.")
             return
+        else:
+            print("Coluna 'Chave Pallet' OK.")
 
         wb = load_workbook(caminho_base)
         ws = wb["dado_sap"]
 
         colunas_base = [cell.value for cell in ws[1]]
         if "Chave Pallet" not in colunas_base or "Data de entrada" not in colunas_base:
-            print("Coluna 'CHAVE_PALLET' ou 'DATA_ENTRADA' não encontrada na planilha base.")
+            print("Coluna 'Chave Pallet' ou 'Data de entrada' não encontrada na planilha base.")
             return
+        else:
+            print("Colunas necessárias encontradas.")
 
         idx_chave = colunas_base.index("Chave Pallet") + 1
         idx_data = colunas_base.index("Data de entrada") + 1
+        print("Identificadores de coluna definidos.")
 
         data_limite = (datetime.today() - timedelta(days=60)).date()
-        linhas_para_apagar = []
+        linha_primeira_valida = None
 
         for i, row in enumerate(ws.iter_rows(min_row=2, max_row=ws.max_row), start=2):
             valor_data = row[idx_data - 1].value
             if isinstance(valor_data, datetime):
                 valor_data = valor_data.date()
-            if valor_data == data_limite:
-                linhas_para_apagar.append(i)
 
-        for offset, linha in enumerate(linhas_para_apagar):
-            ws.delete_rows(linha - offset)
+            if valor_data and valor_data >= data_limite:
+                linha_primeira_valida = i
+                break
 
-        print(f"{len(linhas_para_apagar)} linhas com DATA_ENTRADA = {data_limite.strftime('%d/%m/%Y')} foram removidas.")
+        if linha_primeira_valida and linha_primeira_valida > 2:
+            total_apagar = linha_primeira_valida - 2
+            ws.delete_rows(2, total_apagar)
+            print(f"{total_apagar} linhas com 'Data de entrada' anterior a {data_limite.strftime('%d/%m/%Y')} foram removidas.")
+        else:
+            print("Nenhuma linha antiga encontrada para remover.")
 
         chaves_existentes = set()
         for row in ws.iter_rows(min_row=2, max_col=idx_chave):
             valor = row[idx_chave - 1].value
             if valor:
                 chaves_existentes.add(str(valor))
-
 
         df_filtrado = df_novos[~df_novos["Chave Pallet"].astype(str).isin(chaves_existentes)]
         if df_filtrado.empty:
@@ -80,13 +95,13 @@ def envio_base_sap_teste():
             return
 
         linha_inicio = ws.max_row + 1
-        colunas_data = ["DATA_ENTRADA", "DATA_VENCIMENTO", "DATA_PRODUCAO", "DATA_CRIACAO", "DATA_MODIFICACAO"]
+        colunas_data = ["Data de entrada", "Data do vencimento", "Data de produção", "Data de criação", "Data de modificação"]
 
         for i, row in df_filtrado.iterrows():
             for j, value in enumerate(row):
                 nome_coluna = df_filtrado.columns[j]
 
-                if nome_coluna.upper() in colunas_data:
+                if nome_coluna in colunas_data:
                     if isinstance(value, pd.Timestamp):
                         value = value.date()
                     elif isinstance(value, str):
@@ -101,10 +116,11 @@ def envio_base_sap_teste():
 
         wb.save(caminho_base)
         wb.close()
-        print(f"{len(df_filtrado)} novos registros adicionados com base na coluna CHAVE_PALLET.")
+        print(f"{len(df_filtrado)} novos registros adicionados com base na coluna 'Chave Pallet'.")
 
     except Exception as e:
         print(f"Erro no processo de teste: {e}")
+
 
 if __name__ == "__main__":
     envio_base_sap_teste()
