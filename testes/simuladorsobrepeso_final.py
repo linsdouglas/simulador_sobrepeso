@@ -19,6 +19,7 @@ import numpy as np
 import os
 import threading
 import glob
+import subprocess
 
 def encontrar_pasta_onedrive_empresa():
     user_dir = os.environ["USERPROFILE"]
@@ -49,6 +50,20 @@ def criar_copia_planilha(fonte_dir, nome_arquivo, log_callback):
     except Exception as e:
         log_callback(f"Erro ao criar cópia da planilha: {e}")
         raise
+
+def print_pdf(file_path, impressora="VITLOG01A01", sumatra_path="C:\\Program Files\\SumatraPDF\\SumatraPDF.exe"):
+    args = [sumatra_path, "-print-to", impressora, "-silent", file_path]
+    try:
+        result = subprocess.run(args, check=True, capture_output=True, text=True)
+        print(f"Arquivo impresso com sucesso: {file_path}")
+        if result.stdout:
+            print(f"stdout: {result.stdout}")
+        if result.stderr:
+            print(f"stderr: {result.stderr}")
+    except subprocess.CalledProcessError as e:
+        print(f"Erro ao imprimir {file_path}: {e}")
+        print(f"Output: {e.output}")
+        print(f"Stderr: {e.stderr}")
 
 def integrar_itens_detalhados(df_remessa, df_sap, df_sobrepeso_real, log_callback):
     itens_detalhados = []
@@ -487,6 +502,9 @@ class App(ctk.CTk):
                     "Sucesso",
                     f"Formulário exportado: {pdf_path}\n\nRelatório de divergência salvo:\n{relatorio_path}"
                 )
+                print_pdf(pdf_path)  
+                print_pdf(relatorio_path)
+
                 try:
                     os.remove(file_path)
                     self.add_log(f"Cópia temporária removida: {file_path}")
