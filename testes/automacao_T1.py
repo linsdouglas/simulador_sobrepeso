@@ -9,7 +9,9 @@ import tempfile
 import threading
 import traceback
 import time
-
+import ctypes
+import shutil
+temp_copy_path = None
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
@@ -17,9 +19,26 @@ fonte_dir="Simulador_T1"
 download_dir = os.path.join(os.environ['USERPROFILE'], 'Downloads', fonte_dir)
 
 def executar_processo(mapa_frete_path, mes_usuario, log_callback):
+    def desbloquear_arquivo(path):
+        try:
+            # Remove o bloqueio de segurança do Windows (Zone.Identifier)
+            if os.path.exists(path + ":Zone.Identifier"):
+                os.remove(path + ":Zone.Identifier")
+            ctypes.windll.kernel32.DeleteFileW(f"{path}:Zone.Identifier")
+        except Exception as e:
+            log_callback(f"Aviso: falha ao remover bloqueio de segurança: {e}")
+
     try:
         log_callback("Iniciando processo...")
-        print("iniciando processo")
+
+        temp_dir = tempfile.gettempdir()
+        temp_copy_path = os.path.join(temp_dir, os.path.basename(mapa_frete_path))
+        shutil.copy2(mapa_frete_path, temp_copy_path)
+
+        # Desbloqueia o arquivo copiado se estiver bloqueado por segurança do Windows
+        desbloquear_arquivo(temp_copy_path)
+
+        log_callback(f"Arquivo copiado para uso temporário: {temp_copy_path}")
 
         consol_path = os.path.join(download_dir,"Consol.xlsx")
         simulador_path = os.path.join(download_dir,"Simulador T1_AA_Mar v.2.xlsx")
@@ -27,10 +46,12 @@ def executar_processo(mapa_frete_path, mes_usuario, log_callback):
 
         excel = win32.gencache.EnsureDispatch('Excel.Application')
         excel.Visible = False
+        excel.DisplayAlerts = False
+        excel.Interactive = False
 
         log_callback("Abrindo arquivos...")
-        print("abrindo arquivos")
-        mapa_wb = excel.Workbooks.Open(mapa_frete_path)
+
+        mapa_wb = excel.Workbooks.Open(temp_copy_path)
         consol_wb = excel.Workbooks.Open(consol_path)
         simulador_wb = excel.Workbooks.Open(simulador_path)
         dashboard_wb = excel.Workbooks.Open(dashboard_path)
@@ -58,7 +79,6 @@ def executar_processo(mapa_frete_path, mes_usuario, log_callback):
         simulador_wb.Sheets("Base Transf Real").Range("E3:T2299").ClearContents()
         source_range = consol_wb.Sheets("Link Real T1").Range("A3:P2299")
         dest_range = simulador_wb.Sheets("Base Transf Real").Range("E3:T2299")
-        dest_range.ClearContents()
         dest_range.Value = source_range.Value
 
         log_callback("Atualizando pivôs do simulador...")
@@ -90,6 +110,16 @@ def executar_processo(mapa_frete_path, mes_usuario, log_callback):
 
     except Exception as e:
         log_callback(f"Erro: {str(e)}\n{traceback.format_exc()}")
+
+    finally:
+        if temp_copy_path and os.path.exists(temp_copy_path):
+            try:
+                os.remove(temp_copy_path)
+                log_callback("Arquivo temporário removido.")
+            except Exception as e:
+                log_callback(f"Não foi possível remover a cópia temporária: {str(e)}")
+
+
 
 class App(ctk.CTk):
     def __init__(self):
