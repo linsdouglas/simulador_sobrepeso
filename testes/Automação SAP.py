@@ -1,4 +1,4 @@
-#Automação SAP
+
 import time
 import math
 from datetime import datetime, timedelta, date

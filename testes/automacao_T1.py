@@ -21,7 +21,6 @@ download_dir = os.path.join(os.environ['USERPROFILE'], 'Downloads', fonte_dir)
 def executar_processo(mapa_frete_path, mes_usuario, log_callback):
     def desbloquear_arquivo(path):
         try:
-            # Remove o bloqueio de segurança do Windows (Zone.Identifier)
             if os.path.exists(path + ":Zone.Identifier"):
                 os.remove(path + ":Zone.Identifier")
             ctypes.windll.kernel32.DeleteFileW(f"{path}:Zone.Identifier")
@@ -34,15 +33,13 @@ def executar_processo(mapa_frete_path, mes_usuario, log_callback):
         temp_dir = tempfile.gettempdir()
         temp_copy_path = os.path.join(temp_dir, os.path.basename(mapa_frete_path))
         shutil.copy2(mapa_frete_path, temp_copy_path)
-
-        # Desbloqueia o arquivo copiado se estiver bloqueado por segurança do Windows
         desbloquear_arquivo(temp_copy_path)
 
         log_callback(f"Arquivo copiado para uso temporário: {temp_copy_path}")
 
-        consol_path = os.path.join(download_dir,"Consol.xlsx")
-        simulador_path = os.path.join(download_dir,"Simulador T1_AA_Mar v.2.xlsx")
-        dashboard_path = os.path.join(download_dir,"DASHBOARD_FRETE.xlsx")
+        consol_path = os.path.join(download_dir,"Consol_2.xlsx")
+        simulador_path = os.path.join(download_dir,"Simulador T1_AA_Mar v.2_2.xlsx")
+        dashboard_path = os.path.join(download_dir,"DASHBOARD_FRETE_2.xlsx")
 
         excel = win32.gencache.EnsureDispatch('Excel.Application')
         excel.Visible = False
