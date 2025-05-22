@@ -132,115 +132,94 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
         log_callback("Remessa não encontrada em data_exp.")
         return None
 
-    skus = df_remessa['ITEM'].unique()
-
     peso_base_total = 0
     peso_base_total_liq = 0
-    sobrepesos_por_item = {}
     sp_total = 0
 
-    for sku in skus:
-        qtd_caixas = df_remessa[df_remessa['ITEM'] == sku]['QUANTIDADE'].sum()
-        df_sku_filtrado = df_sku[df_sku['COD_PRODUTO'] == sku]
+    itens_detalhados = []
 
+    for idx, row in df_remessa.iterrows():
+        sku = row['ITEM']
+        chave_pallet_atual = row['CHAVE_PALETE']
+        qtd_caixas = row['QUANTIDADE']
+
+        df_sku_filtrado = df_sku[df_sku['COD_PRODUTO'] == sku]
         if df_sku_filtrado.empty:
+            log_callback(f"SKU {sku} não encontrado na base SKU.")
             continue
 
-        df_sku_filtrado = df_sku_filtrado.sort_values(by='DESC_UNID_MEDID')
         peso_por_caixa_bruto = df_sku_filtrado.iloc[0]['QTDE_PESO_BRU']
         peso_por_caixa_liquido = df_sku_filtrado.iloc[0]['QTDE_PESO_LIQ']
-        peso_base_liq = qtd_caixas * peso_por_caixa_liquido
         peso_base = qtd_caixas * peso_por_caixa_bruto
+        peso_base_liq = qtd_caixas * peso_por_caixa_liquido
+
         peso_base_total += peso_base
         peso_base_total_liq += peso_base_liq
 
-        chaves_pallet = df_remessa[df_remessa['ITEM'] == sku]['CHAVE_PALETE'].unique()
-        df_pallets = df_sap[df_sap['Chave Pallet'].isin(chaves_pallet)]
-        if df_pallets.empty:
-            log_callback(f"Nenhuma chave pallet encontrada para SKU {sku}, usando sobrepeso fixo.")
-            sp_valor, ajuste_fixo = calculo_sobrepeso_fixo(sku, df_base_fisica, peso_base_liq, log_callback)
-            if sp_valor != 0:
-                sobrepesos_por_item[sku] = {'sp': sp_valor, 'origem': 'fixo'}
-                sp_total += ajuste_fixo
-            continue
+        sp = 0
+        origem_sp = 'não encontrado'
+        ajuste_sp = 0
 
-        total_overweight = 0
-        count_sp = 0
+        if pd.notna(chave_pallet_atual) and chave_pallet_atual in df_sap['Chave Pallet'].values:
+            pallet_info = df_sap[df_sap['Chave Pallet'] == chave_pallet_atual].iloc[0]
+            lote = pallet_info['Lote']
+            data_producao = pallet_info['Data de produção']
+            hora_inicio = f"{pallet_info['Hora de criação'].hour:02d}:00:00"
+            hora_fim = f"{pallet_info['Hora de modificação'].hour:02d}:00:00"
+            linha_coluna = "L" + lote[-3:]
 
-        for idx, row in df_pallets.iterrows():
-            try:
-                chave_pallet_atual = row['Chave Pallet']
-                log_callback(f"Processando pallet {chave_pallet_atual} para SKU {sku} ({idx+1}/{len(df_pallets)})...")
+            if linha_coluna in ['LB06', 'LB07']:
+                linha_coluna = 'LB06/07'
 
-                lote = row['Lote']
-                data_producao = row['Data de produção']
-                hora_inicio = f"{row['Hora de criação'].hour:02d}:00:00"
-                hora_fim = f"{row['Hora de modificação'].hour:02d}:00:00"
+            log_callback(f"Processando pallet {chave_pallet_atual} para SKU {sku}.")
 
-                linha_coluna = "L" + lote[-3:] if isinstance(lote, str) and len(lote) >= 2 else "LB00"
-                if linha_coluna in ['LB06', 'LB07']:
-                    linha_coluna='LB06/07'
-                log_callback(f"Linha produzida ajustada: {linha_coluna}")
-                df_sp_filtro = df_sobrepeso_real[
-                    (df_sobrepeso_real['DataHora'] >= pd.to_datetime(f"{data_producao} {hora_inicio}")) &
-                    (df_sobrepeso_real['DataHora'] <= pd.to_datetime(f"{data_producao} {hora_fim}"))
-                ]
+            df_sp_filtro = df_sobrepeso_real[(df_sobrepeso_real['DataHora'] >= pd.to_datetime(f"{data_producao} {hora_inicio}")) &
+                                             (df_sobrepeso_real['DataHora'] <= pd.to_datetime(f"{data_producao} {hora_fim}"))]
 
-                if linha_coluna in df_sp_filtro.columns:
-                    sp_valores = df_sp_filtro[linha_coluna].fillna(0)
-                    if not sp_valores.empty:
-                        media_sp = sp_valores.mean() / 100
-                        log_callback(f"[{linha_coluna}] Média SP: {media_sp:.4f}")
-                        if media_sp == 0.0:
-                            log_callback(f"Média SP é 0. Indo buscar sobrepeso fixo para SKU {sku}.")
-                            sp_valor, ajuste_fixo = calculo_sobrepeso_fixo(sku, df_base_fisica, peso_base_liq, log_callback)
-                        if sp_valor>0:
-                            sobrepesos_por_item[sku] = {'sp':sp_valor, 'origem': f'fixo'}
-                            sp_total += ajuste_fixo
-                            log_callback(f"SOBREPESO FIXO aplicado para SKU {sku}:{sp_valor:.4f} → Ajuste: {ajuste_fixo:.2f} kg")
-                        else:
-                            log_callback(f"Nenhum sobrepeso fixo encontrado para SKU {sku}.")
-                        continue
+            if linha_coluna in df_sp_filtro.columns:
+                sp_valores = df_sp_filtro[linha_coluna].fillna(0)
+                if not sp_valores.empty:
+                    media_sp = sp_valores.mean() / 100
+                    log_callback(f"[{linha_coluna}] Média SP: {media_sp:.4f}")
+
+                    if media_sp != 0.0:
+                        sp = media_sp
+                        origem_sp = 'real'
+                        ajuste_sp = peso_base_liq * sp
                     else:
-                        total_overweight += media_sp
-                        count_sp += 1
-                else:
-                    log_callback(f"[AVISO] Coluna {linha_coluna} não encontrada na base de sobrepeso.")
+                        log_callback(f"Média SP é 0 para SKU {sku}. Indo buscar sobrepeso fixo...")
+            else:
+                log_callback(f"Coluna {linha_coluna} não encontrada na base de sobrepeso.")
 
-            except Exception as e:
-                log_callback(f"Erro ao processar pallet {idx+1}: {e}")
-
-        if count_sp > 0:
-            sp_medio = total_overweight / count_sp
-            sobrepesos_por_item[sku] = {'sp': sp_medio, 'origem': 'real'}
-            sp_total_ajuste = peso_base_liq * sp_medio
-            sp_total += sp_total_ajuste
-            log_callback(f"Total SP médio do SKU {sku}: {sp_medio:.4f}, ajuste total: {sp_total_ajuste:.2f} kg")
-        else:
-            log_callback(f"Nenhum sobrepeso encontrado para SKU {sku} através do sobrepeso real, usando sobrepeso fixo.")
+        if sp == 0:
             sp_valor, ajuste_fixo = calculo_sobrepeso_fixo(sku, df_base_fisica, peso_base_liq, log_callback)
             if sp_valor != 0:
-                sobrepesos_por_item[sku] = {'sp': sp_valor, 'origem': 'fixo'}
-                sp_total += ajuste_fixo
-                log_callback(f"SOBREPESO FIXO aplicado para SKU {sku}: {sp_valor:.4f} → Ajuste: {ajuste_fixo:.2f} kg")
+                sp = sp_valor
+                origem_sp = 'fixo'
+                ajuste_sp = ajuste_fixo
+                log_callback(f"SOBREPESO FIXO aplicado para SKU {sku}: {sp:.4f} → Ajuste: {ajuste_sp:.2f} kg")
             else:
                 log_callback(f"Nenhum sobrepeso encontrado para SKU {sku}.")
-                sobrepesos_por_item[sku]={'sp':0.0,'origem':'nao_encontrado'}
+
+        sp_total += ajuste_sp
+
+        itens_detalhados.append({
+            'sku': sku,
+            'chave_pallet': chave_pallet_atual,
+            'sp': round(sp, 4),
+            'ajuste_sp': round(ajuste_sp, 2),
+            'origem': origem_sp
+        })
 
     peso_com_sobrepeso = peso_base_total + sp_total
     log_callback(f"Peso com sobrepeso: {peso_com_sobrepeso:.2f} kg")
     peso_total_com_paletes = peso_com_sobrepeso + (qtd_paletes * 26) + peso_veiculo_vazio
     log_callback(f"Peso total com paletes ({qtd_paletes} x 26kg): {peso_total_com_paletes:.2f} kg")
 
-    if sobrepesos_por_item:
-        media_sp_geral = sum(item['sp'] for item in sobrepesos_por_item.values()) / len(sobrepesos_por_item)
-    else:
-        media_sp_geral = 0.0
-    log_callback(f"Média geral de sobrepeso (entre {len(sobrepesos_por_item)} itens): {media_sp_geral:.4f}")
+    media_sp_geral = (sum(item['sp'] for item in itens_detalhados) / len(itens_detalhados)) if itens_detalhados else 0.0
+    log_callback(f"Média geral de sobrepeso (entre {len(itens_detalhados)} itens): {media_sp_geral:.4f}")
 
-    itens_detalhados = [{'sku': sku, 'sp': info['sp'], 'origem': info['origem']} for sku, info in sobrepesos_por_item.items()]
     return peso_base_total, sp_total, peso_com_sobrepeso, peso_total_com_paletes, media_sp_geral, itens_detalhados
-
 
 def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_familia, df_sobrepeso_tabela, df_sku, df_remessa, log_callback):
     total_quantidade = 0
@@ -263,12 +242,20 @@ def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_f
             elif sp < 0:
                 ponderador_neg += abs(sp) * qtd
 
-    proporcao_sp_real = (quantidade_com_sp_real / total_quantidade) if total_quantidade > 0 else 0
+    if total_quantidade == 0:
+        proporcao_sp_real = 0
+    else:
+        proporcao_sp_real = quantidade_com_sp_real / total_quantidade
+
     log_callback(f"Total de quantidade: {total_quantidade}, com SP Real: {quantidade_com_sp_real}, proporção: {proporcao_sp_real:.2%}")
 
     if proporcao_sp_real >= 0.5:
-        media_positiva = (ponderador_pos / quantidade_com_sp_real) if ponderador_pos > 0 else 0.02
-        media_negativa = (ponderador_neg / quantidade_com_sp_real) if ponderador_neg > 0 else 0.01
+        if quantidade_com_sp_real > 0:
+            media_positiva = ponderador_pos / quantidade_com_sp_real if ponderador_pos > 0 else 0.02
+            media_negativa = ponderador_neg / quantidade_com_sp_real if ponderador_neg > 0 else 0.01
+        else:
+            media_positiva = 0.02
+            media_negativa = 0.01
 
         log_callback("Mais de 50% da quantidade com SP Real. Usando médias ponderadas:")
         log_callback(f"Sobrepeso para mais (real): {media_positiva:.4f}")
@@ -299,7 +286,7 @@ def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_f
         log_callback(f"Sobrepeso para mais (físico): {media_positiva:.4f}")
         log_callback(f"Sobrepeso para menos (físico): {media_negativa:.4f}")
 
-    return media_positiva, media_negativa
+    return media_positiva, media_negativa, proporcao_sp_real
 
 def preencher_formulario_com_openpyxl(path_copia, dados, itens_detalhados, log_callback,df_sku, df_remessa):
     try:
@@ -310,7 +297,7 @@ def preencher_formulario_com_openpyxl(path_copia, dados, itens_detalhados, log_c
         index = ['CARGA COM MIX', 'EXCLUSIVO MASSAS', 'EXCLUSIVO BISCOITOS']
         df_sobrepeso_tabela = pd.DataFrame(dados_tabela, index=index)
         df_base_familia = pd.read_excel(caminho_base_fisica, 'BASE_FAMILIA')
-        sp_pos, sp_neg = calcular_limites_sobrepeso_por_quantidade(
+        sp_pos, sp_neg, proporcao_sp_real = calcular_limites_sobrepeso_por_quantidade(
             dados, itens_detalhados, df_base_familia, df_sobrepeso_tabela, df_sku, df_remessa, log_callback
         )
         wb = load_workbook(path_copia)
@@ -319,6 +306,7 @@ def preencher_formulario_com_openpyxl(path_copia, dados, itens_detalhados, log_c
         log_callback("Preenchendo cabeçalhos principais com openpyxl...")
         ws["A16"] = f"Sobrepeso para (+): {sp_pos*100:.2f}%"
         ws["A18"] = f"Sobrepeso para (-): {sp_neg*100:.2f}%"
+        ws["D7"] = f"{proporcao_sp_real*100:.2f}% x {(1 - proporcao_sp_real)*100:.2f}%"
         ws["B4"] = dados['remessa']
         ws["B6"] = dados['qtd_skus']
         ws["B7"] = dados['placa']
@@ -340,19 +328,20 @@ def preencher_formulario_com_openpyxl(path_copia, dados, itens_detalhados, log_c
         max_itens = linha_fim - linha_inicio + 1
 
         log_callback("Preenchendo SKUs e sobrepesos...")
-        for idx, item in enumerate(itens_detalhados):
+        itens_real = [item for item in itens_detalhados if item['origem'] == 'real']
+        itens_fixo = [item for item in itens_detalhados if item['origem'] == 'fixo']
+        itens_nao_encontrado = [item for item in itens_detalhados if item['origem'] == 'não encontrado']
+
+        itens_ordenados = itens_real + itens_fixo + itens_nao_encontrado
+        for idx, item in enumerate(itens_ordenados):
             if idx >= max_itens:
                 log_callback("Limite máximo de linhas atingido no formulário (C12 até C46). Restante será desconsiderado.")
                 break
             linha = linha_inicio + idx
-            sku_texto = str(item['sku'])
-            if item.get('origem', '') == 'fixo':
-                sku_texto += " (UTILIZADO SOBREPESO FISICO)"
-            elif item.get('origem','')=='nao_encontrado':
-                sku_texto+= " (Não encontrado sobrepeso para o SKU)"
-
+            sku_texto = f"{item['sku']} ({item['origem']})"
             ws[f"C{linha}"] = sku_texto
-            ws[f"D{linha}"] = f"{item['sp']:.4f}"
+            ws[f"D{linha}"] = f"{item['sp']*100:.3f}"
+
 
         wb.save(path_copia)
         log_callback("Formulário preenchido e salvo com sucesso.")
