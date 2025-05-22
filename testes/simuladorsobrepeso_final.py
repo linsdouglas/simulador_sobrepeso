@@ -225,6 +225,7 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
                 log_callback(f"SOBREPESO FIXO aplicado para SKU {sku}: {sp_valor:.4f} → Ajuste: {ajuste_fixo:.2f} kg")
             else:
                 log_callback(f"Nenhum sobrepeso encontrado para SKU {sku}.")
+                sobrepesos_por_item[sku]={'sp':0.0,'origem':'nao_encontrado'}
 
     peso_com_sobrepeso = peso_base_total + sp_total
     log_callback(f"Peso com sobrepeso: {peso_com_sobrepeso:.2f} kg")
@@ -347,6 +348,8 @@ def preencher_formulario_com_openpyxl(path_copia, dados, itens_detalhados, log_c
             sku_texto = str(item['sku'])
             if item.get('origem', '') == 'fixo':
                 sku_texto += " (UTILIZADO SOBREPESO FISICO)"
+            elif item.get('origem','')=='nao_encontrado':
+                sku_texto+= " (Não encontrado sobrepeso para o SKU)"
 
             ws[f"C{linha}"] = sku_texto
             ws[f"D{linha}"] = f"{item['sp']:.4f}"
