@@ -38,7 +38,7 @@ def executar_processo(mapa_frete_path, mes_usuario, log_callback):
         log_callback(f"Arquivo copiado para uso temporário: {temp_copy_path}")
 
         consol_path = os.path.join(download_dir,"Consol.xlsx")
-        simulador_path = os.path.join(download_dir,"Simulador T1.xlsx")
+        simulador_path = os.path.join(download_dir,"Simulador_T1.xlsx")
         dashboard_path = os.path.join(download_dir,"DASHBOARD_FRETE.xlsx")
 
         excel = win32.gencache.EnsureDispatch('Excel.Application')
