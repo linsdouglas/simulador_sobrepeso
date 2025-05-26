@@ -120,7 +120,9 @@ def calculo_sobrepeso_fixo(sku, df_base_fisica, peso_base_liq, log_callback):
         log_callback(f"Erro ao buscar sobrepeso fixo para SKU {sku}: {e}")
         return 0, 0
 
-def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedicao, df_sku, df_sap, df_sobrepeso_real, df_base_fisica, log_callback):
+def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes,
+                        df_expedicao, df_sku, df_sap, df_sobrepeso_real,
+                        df_base_fisica, df_frac, log_callback):
     try:
         remessa_num = int(remessa_num)
     except ValueError:
@@ -135,13 +137,19 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
     peso_base_total = 0
     peso_base_total_liq = 0
     sp_total = 0
-
     itens_detalhados = []
 
     for idx, row in df_remessa.iterrows():
         sku = row['ITEM']
         chave_pallet_atual = row['CHAVE_PALETE']
         qtd_caixas = row['QUANTIDADE']
+
+        if pd.isna(chave_pallet_atual):
+            df_frac_remessa = df_frac[(df_frac['REMESSA'] == remessa_num) & (df_frac['ITEM'] == sku)]
+            if not df_frac_remessa.empty:
+                chave_pallet_atual = df_frac_remessa.iloc[0]['CHAVE_PALETE']
+                qtd_caixas = df_frac_remessa.iloc[0]['QUANTIDADE'] 
+                log_callback(f"Chave pallet e quantidade encontradas na base FRACAO: {chave_pallet_atual} → QTD: {qtd_caixas} para SKU {sku}")
 
         df_sku_filtrado = df_sku[df_sku['COD_PRODUTO'] == sku]
         if df_sku_filtrado.empty:
@@ -152,10 +160,8 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
         peso_por_caixa_liquido = df_sku_filtrado.iloc[0]['QTDE_PESO_LIQ']
         peso_base = qtd_caixas * peso_por_caixa_bruto
         peso_base_liq = qtd_caixas * peso_por_caixa_liquido
-
         peso_base_total += peso_base
         peso_base_total_liq += peso_base_liq
-
         sp = 0
         origem_sp = 'não encontrado'
         ajuste_sp = 0
@@ -167,15 +173,13 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
             hora_inicio = f"{pallet_info['Hora de criação'].hour:02d}:00:00"
             hora_fim = f"{pallet_info['Hora de modificação'].hour:02d}:00:00"
             linha_coluna = "L" + lote[-3:]
-
             if linha_coluna in ['LB06', 'LB07']:
                 linha_coluna = 'LB06/07'
-
             log_callback(f"Processando pallet {chave_pallet_atual} para SKU {sku}.")
-
-            df_sp_filtro = df_sobrepeso_real[(df_sobrepeso_real['DataHora'] >= pd.to_datetime(f"{data_producao} {hora_inicio}")) &
-                                             (df_sobrepeso_real['DataHora'] <= pd.to_datetime(f"{data_producao} {hora_fim}"))]
-
+            df_sp_filtro = df_sobrepeso_real[
+                (df_sobrepeso_real['DataHora'] >= pd.to_datetime(f"{data_producao} {hora_inicio}")) &
+                (df_sobrepeso_real['DataHora'] <= pd.to_datetime(f"{data_producao} {hora_fim}"))
+            ]
             if linha_coluna in df_sp_filtro.columns:
                 sp_valores = df_sp_filtro[linha_coluna].fillna(0)
                 if not sp_valores.empty:
@@ -200,9 +204,7 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
                 log_callback(f"SOBREPESO FIXO aplicado para SKU {sku}: {sp:.4f} → Ajuste: {ajuste_sp:.2f} kg")
             else:
                 log_callback(f"Nenhum sobrepeso encontrado para SKU {sku}.")
-
         sp_total += ajuste_sp
-
         itens_detalhados.append({
             'sku': sku,
             'chave_pallet': chave_pallet_atual,
@@ -210,15 +212,12 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
             'ajuste_sp': round(ajuste_sp, 2),
             'origem': origem_sp
         })
-
     peso_com_sobrepeso = peso_base_total + sp_total
     log_callback(f"Peso com sobrepeso: {peso_com_sobrepeso:.2f} kg")
     peso_total_com_paletes = peso_com_sobrepeso + (qtd_paletes * 26) + peso_veiculo_vazio
     log_callback(f"Peso total com paletes ({qtd_paletes} x 26kg): {peso_total_com_paletes:.2f} kg")
-
     media_sp_geral = (sum(item['sp'] for item in itens_detalhados) / len(itens_detalhados)) if itens_detalhados else 0.0
     log_callback(f"Média geral de sobrepeso (entre {len(itens_detalhados)} itens): {media_sp_geral:.4f}")
-
     return peso_base_total, sp_total, peso_com_sobrepeso, peso_total_com_paletes, media_sp_geral, itens_detalhados
 
 def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_familia, df_sobrepeso_tabela, df_sku, df_remessa, log_callback):
@@ -535,6 +534,8 @@ class App(ctk.CTk):
         path_base_sobrepeso = os.path.join(fonte_dir, "Base_sobrepeso_real.xlsx")
         path_base_expedicao = os.path.join(fonte_dir, "expedicao.xlsx")
         path_base_sap = os.path.join(fonte_dir, "base_sap.xlsx")
+        path_base_frac = os.path.join(fonte_dir, "FRACAO.xlsx")
+        df_frac=pd.read_excel(path_base_frac, sheet_name="Sheet1")
         df_sap = pd.read_excel(path_base_sap, sheet_name="Sheet1")
         df_expedicao = pd.read_excel(path_base_expedicao, sheet_name="dado_exp")
         df_sobrepeso_real = pd.read_excel(path_base_sobrepeso, sheet_name="SOBREPESO")
@@ -563,7 +564,7 @@ class App(ctk.CTk):
             self.add_log("Iniciando cálculo do peso final...")
             resultado = calcular_peso_final(
                 remessa, peso_vazio, qtd_paletes,
-                df_expedicao, df_sku, df_sap, df_sobrepeso_real,df_base_fisica,
+                df_expedicao, df_sku, df_sap, df_sobrepeso_real,df_base_fisica, df_frac,
                 self.add_log
             )
 
