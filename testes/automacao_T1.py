@@ -29,8 +29,8 @@ def encontrar_pasta_onedrive_empresa():
                 return os.path.join(caminho_completo, "Gestão de Estoque - Documentos")
     return None
 unidade='Simulador_T1'
-fonte_dir = encontrar_pasta_onedrive_empresa()
-#fonte_dir = os.path.join(os.environ['USERPROFILE'], 'Downloads') 
+#fonte_dir = encontrar_pasta_onedrive_empresa()
+fonte_dir = os.path.join(os.environ['USERPROFILE'], 'Downloads') 
 if not fonte_dir:
     raise FileNotFoundError("Não foi possível localizar a pasta sincronizada do SharePoint via OneDrive.")
 
@@ -71,30 +71,25 @@ def abrir_workbook(excel, path, log_callback, tentativas=3, espera=2):
                 raise
 
 def executar_processo(mapa_frete_path, mes_usuario, log_callback):
-    arquivos_temp = []
-
     try:
-        log_callback("Iniciando processo sequencial...")
+        log_callback("Iniciando processo direto nos arquivos originais...")
 
         excel = win32.gencache.EnsureDispatch('Excel.Application')
         excel.Visible = False
         excel.DisplayAlerts = False
         excel.Interactive = False
 
-        # Copiar arquivos
-        mapa_temp = copiar_arquivo_temporario(mapa_frete_path, log_callback)
-        consol_temp = copiar_arquivo_temporario(consol_path, log_callback)
-        simulador_temp = copiar_arquivo_temporario(simulador_path, log_callback)
-        dashboard_temp = copiar_arquivo_temporario(dashboard_path, log_callback)
-
-        arquivos_temp.extend([mapa_temp, consol_temp, simulador_temp, dashboard_temp])
-
-        # Passo 1 - Processar Mapa e Consol
         log_callback("Abrindo Mapa Frete...")
-        mapa_wb = abrir_workbook(excel, mapa_temp, log_callback)
+        mapa_wb = abrir_workbook(excel, mapa_frete_path, log_callback)
 
         log_callback("Abrindo Consol...")
-        consol_wb = abrir_workbook(excel, consol_temp, log_callback)
+        consol_wb = abrir_workbook(excel, consol_path, log_callback)
+
+        log_callback("Abrindo Simulador...")
+        simulador_wb = abrir_workbook(excel, simulador_path, log_callback)
+
+        log_callback("Abrindo Dashboard...")
+        dashboard_wb = abrir_workbook(excel, dashboard_path, log_callback)
 
         ws_mapa = consol_wb.Sheets("Mapa Frete")
         last_row = ws_mapa.Cells(ws_mapa.Rows.Count, "AD").End(-4162).Row
@@ -115,23 +110,15 @@ def executar_processo(mapa_frete_path, mes_usuario, log_callback):
             except Exception as e:
                 log_callback(f"Aviso: erro ao atualizar pivô na aba {ws.Name}: {e}")
 
-        consol_wb.Close(SaveChanges=True)
-
-        # Passo 2 - Processar Simulador
-        log_callback("Abrindo Simulador...")
-        simulador_wb = abrir_workbook(excel, simulador_temp, log_callback)
+        consol_wb.Save()
 
         simulador_wb.Sheets("CÓD").Range("B3").Value = mes_usuario
         simulador_wb.Sheets("Base Transf Real").Range("E3:T2299").ClearContents()
 
-        log_callback("Reabrindo Consol para extrair Link Real T1...")
-        consol_wb = abrir_workbook(excel, consol_temp, log_callback)
-
+        log_callback("Extraindo dados de Link Real T1...")
         source_range = consol_wb.Sheets("Link Real T1").Range("A3:P2299")
         dest_range = simulador_wb.Sheets("Base Transf Real").Range("E3:T2299")
         dest_range.Value = source_range.Value
-
-        consol_wb.Close(SaveChanges=False)
 
         log_callback("Atualizando pivôs do Simulador...")
         for ws in simulador_wb.Sheets:
@@ -142,39 +129,31 @@ def executar_processo(mapa_frete_path, mes_usuario, log_callback):
                 log_callback(f"Aviso: erro ao atualizar pivô na aba {ws.Name}: {e}")
 
         efeitos_range = simulador_wb.Sheets("Efeitos Regional").Range("B3:I17")
-        efeitos_valor = efeitos_range.Value
-        log_callback("Efeitos capturados da aba 'Efeitos Regional' como matriz de valores.")
-        simulador_wb.Close(SaveChanges=True)
+        efeitos_range.Copy()
+        log_callback("Efeitos copiados da aba 'Efeitos Regional'.")
 
-        # Passo 3 - Processar Dashboard
-        log_callback("Abrindo Dashboard...")
-        dashboard_wb = abrir_workbook(excel, dashboard_temp, log_callback)
-
+        time.sleep(1)  
         try:
             bd_sheet = dashboard_wb.Sheets("BD")
-            bd_range = bd_sheet.Range("A1").Resize(len(efeitos_valor), len(efeitos_valor[0]))
-            bd_range.Value = efeitos_valor
+            bd_sheet.Range("A1").PasteSpecial(Paste=-4163)
             log_callback("Efeitos colados na aba 'BD' do DASHBOARD_FRETE.")
         except Exception as e:
             log_callback(f"Aviso: não foi possível colar efeitos na aba 'BD': {e}")
 
+        simulador_wb.Save()
+        dashboard_wb.Save()
+
+        # Fechar arquivos
+        consol_wb.Close(SaveChanges=True)
+        simulador_wb.Close(SaveChanges=True)
         dashboard_wb.Close(SaveChanges=True)
 
         excel.Quit()
 
-        log_callback("Processo sequencial concluído com sucesso.")
+        log_callback("Processo concluído com sucesso, alterações salvas diretamente nos arquivos.")
 
     except Exception as e:
         log_callback(f"Erro: {str(e)}\n{traceback.format_exc()}")
-
-    finally:
-        for temp_file in arquivos_temp:
-            try:
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
-                    log_callback(f"Arquivo temporário removido: {temp_file}")
-            except Exception as e:
-                log_callback(f"Não foi possível remover a cópia temporária {temp_file}: {str(e)}")
 
 class App(ctk.CTk):
     def __init__(self):
