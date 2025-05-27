@@ -145,10 +145,10 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes,
         qtd_caixas = row['QUANTIDADE']
 
         if pd.isna(chave_pallet_atual):
-            df_frac_remessa = df_frac[(df_frac['REMESSA'] == remessa_num) & (df_frac['ITEM'] == sku)]
+            df_frac_remessa = df_frac[df_frac['remessa'] == remessa_num]
             if not df_frac_remessa.empty:
-                chave_pallet_atual = df_frac_remessa.iloc[0]['CHAVE_PALETE']
-                qtd_caixas = df_frac_remessa.iloc[0]['QUANTIDADE'] 
+                chave_pallet_atual = df_frac_remessa.iloc[0]['chave_pallete']
+                qtd_caixas = df_frac_remessa.iloc[0]['qtd'] 
                 log_callback(f"Chave pallet e quantidade encontradas na base FRACAO: {chave_pallet_atual} → QTD: {qtd_caixas} para SKU {sku}")
 
         df_sku_filtrado = df_sku[df_sku['COD_PRODUTO'] == sku]
@@ -210,7 +210,8 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes,
             'chave_pallet': chave_pallet_atual,
             'sp': round(sp, 4),
             'ajuste_sp': round(ajuste_sp, 2),
-            'origem': origem_sp
+            'origem': origem_sp,
+            'qtd':qtd_caixas
         })
     peso_com_sobrepeso = peso_base_total + sp_total
     log_callback(f"Peso com sobrepeso: {peso_com_sobrepeso:.2f} kg")
