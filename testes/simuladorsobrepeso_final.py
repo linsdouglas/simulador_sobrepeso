@@ -147,9 +147,14 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes,
         if pd.isna(chave_pallet_atual):
             df_frac_remessa = df_frac[df_frac['remessa'] == remessa_num]
             if not df_frac_remessa.empty:
-                chave_pallet_atual = df_frac_remessa.iloc[0]['chave_pallete']
-                qtd_caixas = df_frac_remessa.iloc[0]['qtd'] 
-                log_callback(f"Chave pallet e quantidade encontradas na base FRACAO: {chave_pallet_atual} → QTD: {qtd_caixas} para SKU {sku}")
+                for _, frac_row in df_frac_remessa.iterrows():
+                    chave_pallet_atual = frac_row['chave_pallete']
+                    qtd_caixas = frac_row['qtd']
+                    log_callback(f"Chave pallet encontrada na base FRACAO: {chave_pallet_atual} → QTD: {qtd_caixas}")
+                    df_sap_match = df_sap[df_sap['Chave Pallet'] == chave_pallet_atual]
+                    if not df_sap_match.empty:
+                        sku = df_sap_match.iloc[0]['Material']
+                        log_callback(f"SKU {sku} encontrado na base SAP para chave pallet {chave_pallet_atual}")
 
         df_sku_filtrado = df_sku[df_sku['COD_PRODUTO'] == sku]
         if df_sku_filtrado.empty:
@@ -221,7 +226,7 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes,
     log_callback(f"Média geral de sobrepeso (entre {len(itens_detalhados)} itens): {media_sp_geral:.4f}")
     return peso_base_total, sp_total, peso_com_sobrepeso, peso_total_com_paletes, media_sp_geral, itens_detalhados
 
-def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_familia, df_sobrepeso_tabela, df_sku, df_remessa, log_callback):
+def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_familia, df_sobrepeso_tabela, df_sku, df_remessa, df_fracao, log_callback):
     total_quantidade = 0
     quantidade_com_sp_real = 0
     ponderador_pos = 0
@@ -232,7 +237,10 @@ def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_f
         sp = item.get('sp', 0)
         origem = item.get('origem', 'fixo')
 
-        qtd = df_remessa[(df_remessa['REMESSA'] == dados['remessa']) & (df_remessa['ITEM'] == sku)]['QUANTIDADE'].sum()
+        if 'chave_pallet' in item and item['chave_pallet'] in df_fracao['chave_pallete'].values:
+            qtd_frac = df_fracao[df_fracao['chave_pallete'] == item['chave_pallet']]['qtd'].sum()
+            qtd += qtd_frac
+
         total_quantidade += qtd
 
         if origem == 'real':
@@ -288,7 +296,7 @@ def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_f
 
     return media_positiva, media_negativa, proporcao_sp_real
 
-def preencher_formulario_com_openpyxl(path_copia, dados, itens_detalhados, log_callback,df_sku, df_remessa):
+def preencher_formulario_com_openpyxl(path_copia, dados, itens_detalhados, log_callback,df_sku, df_remessa, df_fracao):
     try:
         dados_tabela = {
         '(+)': [0.02, 0.005, 0.04],
@@ -298,7 +306,7 @@ def preencher_formulario_com_openpyxl(path_copia, dados, itens_detalhados, log_c
         df_sobrepeso_tabela = pd.DataFrame(dados_tabela, index=index)
         df_base_familia = pd.read_excel(caminho_base_fisica, 'BASE_FAMILIA')
         sp_pos, sp_neg, proporcao_sp_real = calcular_limites_sobrepeso_por_quantidade(
-            dados, itens_detalhados, df_base_familia, df_sobrepeso_tabela, df_sku, df_remessa, log_callback
+            dados, itens_detalhados, df_base_familia, df_sobrepeso_tabela, df_sku, df_remessa, df_fracao, log_callback
         )
         wb = load_workbook(path_copia)
         ws = wb["FORMULARIO"]
@@ -542,6 +550,9 @@ class App(ctk.CTk):
         df_sobrepeso_real = pd.read_excel(path_base_sobrepeso, sheet_name="SOBREPESO")
         df_sobrepeso_real['DataHora'] = pd.to_datetime(df_sobrepeso_real['DataHora'])
         df_base_fisica = pd.read_excel(caminho_base_fisica, sheet_name="BASE FISICA")
+        df_fracao = pd.read_excel(path_base_frac, sheet_name="Sheet1")
+
+
         try:
             self.log_text.clear()
             self.log_display.configure(text="")
@@ -587,7 +598,7 @@ class App(ctk.CTk):
                 }
 
                 self.add_log("Chamando preenchimento do formulário via COM...")
-                preencher_formulario_com_openpyxl(file_path, dados, itens_detalhados, self.add_log, df_sku, df_remessa)
+                preencher_formulario_com_openpyxl(file_path, dados, itens_detalhados, self.add_log, df_sku, df_remessa,df_fracao)
 
 
                 self.add_log("Exportando PDF...")
