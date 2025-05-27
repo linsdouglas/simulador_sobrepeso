@@ -116,8 +116,8 @@ def executar_processo(mapa_frete_path, mes_usuario, log_callback):
         simulador_wb.Sheets("Base Transf Real").Range("E3:T2299").ClearContents()
 
         log_callback("Extraindo dados de Link Real T1...")
-        source_range = consol_wb.Sheets("Link Real T1").Range("A3:P2299")
-        dest_range = simulador_wb.Sheets("Base Transf Real").Range("E3:T2299")
+        source_range = consol_wb.Sheets("Link Real T1").Range("C3:R2463")
+        dest_range = simulador_wb.Sheets("Base Transf Real").Range("E3:T2463")
         dest_range.Value = source_range.Value
 
         log_callback("Atualizando pivôs do Simulador...")
