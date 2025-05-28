@@ -110,7 +110,14 @@ def calculo_sobrepeso_fixo(sku, df_base_fisica, peso_base_liq, log_callback):
         sp_row = df_base_fisica[df_base_fisica['CÓDIGO PRODUTO'] == sku]
         if not sp_row.empty:
             sp_fixo = sp_row.iloc[0]['SOBRE PESO'] / 100
-            ajuste = peso_base_liq * sp_fixo
+            peso_base_liq = pd.to_numeric(peso_base_liq, errors='coerce')
+
+            if isinstance(peso_base_liq, pd.Series):
+                peso_base_liq = peso_base_liq.iloc[0]
+            if pd.notna(peso_base_liq):
+                ajuste = float(peso_base_liq) * float(sp_fixo)
+            else:
+                ajuste = 0.0
             log_callback(f"SOBREPESO FIXO encontrado para SKU {sku}: {sp_fixo:.4f}")
             return sp_fixo, ajuste
         else:
@@ -120,9 +127,65 @@ def calculo_sobrepeso_fixo(sku, df_base_fisica, peso_base_liq, log_callback):
         log_callback(f"Erro ao buscar sobrepeso fixo para SKU {sku}: {e}")
         return 0, 0
 
-def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes,
-                        df_expedicao, df_sku, df_sap, df_sobrepeso_real,
-                        df_base_fisica, df_frac, log_callback):
+    
+def processar_sobrepeso(chave_pallet, sku, peso_base_liq, df_sap, df_sobrepeso_real, df_base_fisica, log_callback):
+    sp = 0
+    origem_sp = 'não encontrado'
+    ajuste_sp = 0
+
+    if pd.notna(chave_pallet) and chave_pallet in df_sap['Chave Pallet'].values:
+        pallet_info = df_sap[df_sap['Chave Pallet'] == chave_pallet].iloc[0]
+        lote = pallet_info['Lote']
+        data_producao = pallet_info['Data de produção']
+        hora_inicio = f"{pallet_info['Hora de criação'].hour:02d}:00:00"
+        hora_fim = f"{pallet_info['Hora de modificação'].hour:02d}:00:00"
+        linha_coluna = "L" + lote[-3:]
+        if linha_coluna in ['LB06', 'LB07']:
+            linha_coluna = 'LB06/07'
+
+        log_callback(f"Processando pallet {chave_pallet} para SKU {sku}.")
+
+        df_sp_filtro = df_sobrepeso_real[
+            (df_sobrepeso_real['DataHora'] >= pd.to_datetime(f"{data_producao} {hora_inicio}")) &
+            (df_sobrepeso_real['DataHora'] <= pd.to_datetime(f"{data_producao} {hora_fim}"))
+        ]
+
+        if linha_coluna in df_sp_filtro.columns:
+            sp_valores = df_sp_filtro[linha_coluna].fillna(0)
+            if not sp_valores.empty:
+                media_sp = sp_valores.mean() / 100
+                log_callback(f"[{linha_coluna}] Média SP: {media_sp:.4f}")
+
+                peso_base_liq = pd.to_numeric(peso_base_liq, errors='coerce')
+                sp = pd.to_numeric(media_sp, errors='coerce')
+
+                if isinstance(peso_base_liq, pd.Series):
+                    peso_base_liq = peso_base_liq.iloc[0]
+                if isinstance(sp, pd.Series):
+                    sp = sp.iloc[0]
+
+                if pd.notna(peso_base_liq) and pd.notna(sp):
+                    ajuste_sp = float(peso_base_liq) * float(sp)
+                    origem_sp = 'real'
+                else:
+                    ajuste_sp = 0.0
+                    log_callback(f"Erro: peso_base_liq ou sp inválido para SKU {sku}. Ajuste SP definido como 0.")
+        else:
+            log_callback(f"Coluna {linha_coluna} não encontrada na base de sobrepeso.")
+
+    if sp == 0:
+        sp_valor, ajuste_fixo = calculo_sobrepeso_fixo(sku, df_base_fisica, peso_base_liq, log_callback)
+        if sp_valor != 0:
+            sp = sp_valor
+            origem_sp = 'fixo'
+            ajuste_sp = ajuste_fixo
+            log_callback(f"SOBREPESO FIXO aplicado para SKU {sku}: {sp:.4f} → Ajuste: {ajuste_sp:.2f} kg")
+        else:
+            log_callback(f"Nenhum sobrepeso encontrado para SKU {sku}.")
+
+    return sp, origem_sp, ajuste_sp
+
+def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedicao, df_sku, df_sap, df_sobrepeso_real, df_base_fisica, df_frac, log_callback):
     try:
         remessa_num = int(remessa_num)
     except ValueError:
@@ -139,84 +202,121 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes,
     sp_total = 0
     itens_detalhados = []
 
-    for idx, row in df_remessa.iterrows():
-        sku = row['ITEM']
-        chave_pallet_atual = row['CHAVE_PALETE']
-        qtd_caixas = row['QUANTIDADE']
+    chaves_pallet_processadas = set()
 
-        if pd.isna(chave_pallet_atual):
-            df_frac_remessa = df_frac[df_frac['remessa'] == remessa_num]
-            if not df_frac_remessa.empty:
-                for _, frac_row in df_frac_remessa.iterrows():
-                    chave_pallet_atual = frac_row['chave_pallete']
-                    qtd_caixas = frac_row['qtd']
-                    log_callback(f"Chave pallet encontrada na base FRACAO: {chave_pallet_atual} → QTD: {qtd_caixas}")
-                    df_sap_match = df_sap[df_sap['Chave Pallet'] == chave_pallet_atual]
-                    if not df_sap_match.empty:
-                        sku = df_sap_match.iloc[0]['Material']
-                        log_callback(f"SKU {sku} encontrado na base SAP para chave pallet {chave_pallet_atual}")
+    df_expedicao_sem_pallet = df_remessa[df_remessa['CHAVE_PALETE'].isna()]
+    pacotes_expedicao = df_expedicao_sem_pallet.groupby(['ITEM', 'QUANTIDADE']).size().reset_index(name='count')
+
+    for _, pacote in pacotes_expedicao.iterrows():
+        sku = pacote['ITEM']
+        qtd = pacote['QUANTIDADE']
+        count_expedicao = pacote['count']
+
+        df_frac_match = df_frac[(df_frac['remessa'] == remessa_num) & (df_frac['SKU'] == sku) & (df_frac['qtd'] == qtd)]
+        count_fracao = len(df_frac_match)
+
+        qtd_real = min(count_expedicao, count_fracao)
+        qtd_fixo = count_expedicao - qtd_real
+
+        log_callback(f"Processando SKU {sku} QTD {qtd}: {qtd_real} via real, {qtd_fixo} via fixo")
+
+        for idx in range(qtd_real):
+            frac_row = df_frac_match.iloc[idx]
+            chave_frac = frac_row['chave_pallete']
+            if chave_frac in chaves_pallet_processadas:
+                continue
+            chaves_pallet_processadas.add(chave_frac)
+
+            pallet_info = df_sap[df_sap['Chave Pallet'] == chave_frac]
+
+            if pallet_info.empty:
+                log_callback(f"Chave pallet {chave_frac} da FRACAO não encontrada na base SAP.")
+                continue
+
+            pallet_info = pallet_info.iloc[0]
+            df_sku_filtrado = df_sku[df_sku['COD_PRODUTO'] == sku]
+            if df_sku_filtrado.empty:
+                log_callback(f"SKU {sku} não encontrado na base SKU.")
+                continue
+
+            peso_por_caixa_bruto = float(df_sku_filtrado.iloc[0]['QTDE_PESO_BRU'])
+            peso_por_caixa_liquido = float(df_sku_filtrado.iloc[0]['QTDE_PESO_LIQ'])
+            peso_base = qtd * peso_por_caixa_bruto
+            peso_base_liq = qtd * peso_por_caixa_liquido
+            peso_base_total += peso_base
+            peso_base_total_liq += peso_base_liq
+
+            sp, origem_sp, ajuste_sp = processar_sobrepeso(chave_frac, sku, peso_base_liq, df_sap, df_sobrepeso_real, df_base_fisica, log_callback)
+
+            sp_total += ajuste_sp
+
+            itens_detalhados.append({
+                'sku': sku,
+                'chave_pallet': chave_frac,
+                'sp': round(sp, 4),
+                'ajuste_sp': round(ajuste_sp, 2),
+                'origem': origem_sp
+            })
+
+        for idx in range(qtd_fixo):
+            df_sku_filtrado = df_sku[df_sku['COD_PRODUTO'] == sku]
+            if df_sku_filtrado.empty:
+                log_callback(f"SKU {sku} não encontrado na base SKU.")
+                continue
+
+            peso_por_caixa_bruto = float(df_sku_filtrado.iloc[0]['QTDE_PESO_BRU'])
+            peso_por_caixa_liquido = float(df_sku_filtrado.iloc[0]['QTDE_PESO_LIQ'])
+            peso_base = qtd * peso_por_caixa_bruto
+            peso_base_liq = qtd * peso_por_caixa_liquido
+            peso_base_total += peso_base
+            peso_base_total_liq += peso_base_liq
+
+            sp_valor, ajuste_sp = calculo_sobrepeso_fixo(sku, df_base_fisica, peso_base_liq, log_callback)
+            sp = sp_valor
+            origem_sp = 'fixo'
+            sp_total += ajuste_sp
+
+            itens_detalhados.append({
+                'sku': sku,
+                'chave_pallet': 'N/A',
+                'sp': round(sp, 4),
+                'ajuste_sp': round(ajuste_sp, 2),
+                'origem': origem_sp
+            })
+    df_expedicao_com_pallet = df_remessa[df_remessa['CHAVE_PALETE'].notna()]
+
+    for _, row in df_expedicao_com_pallet.iterrows():
+        sku = row['ITEM']
+        chave_pallet = row['CHAVE_PALETE']
+        qtd_caixas = float(row['QUANTIDADE'])
+
+        if chave_pallet in chaves_pallet_processadas:
+            continue
+
+        chaves_pallet_processadas.add(chave_pallet)
 
         df_sku_filtrado = df_sku[df_sku['COD_PRODUTO'] == sku]
         if df_sku_filtrado.empty:
             log_callback(f"SKU {sku} não encontrado na base SKU.")
             continue
 
-        peso_por_caixa_bruto = df_sku_filtrado.iloc[0]['QTDE_PESO_BRU']
-        peso_por_caixa_liquido = df_sku_filtrado.iloc[0]['QTDE_PESO_LIQ']
+        peso_por_caixa_bruto = float(df_sku_filtrado.iloc[0]['QTDE_PESO_BRU'])
+        peso_por_caixa_liquido = float(df_sku_filtrado.iloc[0]['QTDE_PESO_LIQ'])
         peso_base = qtd_caixas * peso_por_caixa_bruto
         peso_base_liq = qtd_caixas * peso_por_caixa_liquido
         peso_base_total += peso_base
         peso_base_total_liq += peso_base_liq
-        sp = 0
-        origem_sp = 'não encontrado'
-        ajuste_sp = 0
 
-        if pd.notna(chave_pallet_atual) and chave_pallet_atual in df_sap['Chave Pallet'].values:
-            pallet_info = df_sap[df_sap['Chave Pallet'] == chave_pallet_atual].iloc[0]
-            lote = pallet_info['Lote']
-            data_producao = pallet_info['Data de produção']
-            hora_inicio = f"{pallet_info['Hora de criação'].hour:02d}:00:00"
-            hora_fim = f"{pallet_info['Hora de modificação'].hour:02d}:00:00"
-            linha_coluna = "L" + lote[-3:]
-            if linha_coluna in ['LB06', 'LB07']:
-                linha_coluna = 'LB06/07'
-            log_callback(f"Processando pallet {chave_pallet_atual} para SKU {sku}.")
-            df_sp_filtro = df_sobrepeso_real[
-                (df_sobrepeso_real['DataHora'] >= pd.to_datetime(f"{data_producao} {hora_inicio}")) &
-                (df_sobrepeso_real['DataHora'] <= pd.to_datetime(f"{data_producao} {hora_fim}"))
-            ]
-            if linha_coluna in df_sp_filtro.columns:
-                sp_valores = df_sp_filtro[linha_coluna].fillna(0)
-                if not sp_valores.empty:
-                    media_sp = sp_valores.mean() / 100
-                    log_callback(f"[{linha_coluna}] Média SP: {media_sp:.4f}")
+        sp, origem_sp, ajuste_sp = processar_sobrepeso(chave_pallet, sku, peso_base_liq, df_sap, df_sobrepeso_real, df_base_fisica, log_callback)
 
-                    if media_sp != 0.0:
-                        sp = media_sp
-                        origem_sp = 'real'
-                        ajuste_sp = peso_base_liq * sp
-                    else:
-                        log_callback(f"Média SP é 0 para SKU {sku}. Indo buscar sobrepeso fixo...")
-            else:
-                log_callback(f"Coluna {linha_coluna} não encontrada na base de sobrepeso.")
-
-        if sp == 0:
-            sp_valor, ajuste_fixo = calculo_sobrepeso_fixo(sku, df_base_fisica, peso_base_liq, log_callback)
-            if sp_valor != 0:
-                sp = sp_valor
-                origem_sp = 'fixo'
-                ajuste_sp = ajuste_fixo
-                log_callback(f"SOBREPESO FIXO aplicado para SKU {sku}: {sp:.4f} → Ajuste: {ajuste_sp:.2f} kg")
-            else:
-                log_callback(f"Nenhum sobrepeso encontrado para SKU {sku}.")
         sp_total += ajuste_sp
+
         itens_detalhados.append({
             'sku': sku,
-            'chave_pallet': chave_pallet_atual,
+            'chave_pallet': chave_pallet,
             'sp': round(sp, 4),
             'ajuste_sp': round(ajuste_sp, 2),
-            'origem': origem_sp,
-            'qtd':qtd_caixas
+            'origem': origem_sp
         })
     peso_com_sobrepeso = peso_base_total + sp_total
     log_callback(f"Peso com sobrepeso: {peso_com_sobrepeso:.2f} kg")
@@ -224,6 +324,7 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes,
     log_callback(f"Peso total com paletes ({qtd_paletes} x 26kg): {peso_total_com_paletes:.2f} kg")
     media_sp_geral = (sum(item['sp'] for item in itens_detalhados) / len(itens_detalhados)) if itens_detalhados else 0.0
     log_callback(f"Média geral de sobrepeso (entre {len(itens_detalhados)} itens): {media_sp_geral:.4f}")
+
     return peso_base_total, sp_total, peso_com_sobrepeso, peso_total_com_paletes, media_sp_geral, itens_detalhados
 
 def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_familia, df_sobrepeso_tabela, df_sku, df_remessa, df_fracao, log_callback):
@@ -236,10 +337,13 @@ def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_f
         sku = item['sku']
         sp = item.get('sp', 0)
         origem = item.get('origem', 'fixo')
+        qtd = 0
 
         if 'chave_pallet' in item and item['chave_pallet'] in df_fracao['chave_pallete'].values:
-            qtd_frac = df_fracao[df_fracao['chave_pallete'] == item['chave_pallet']]['qtd'].sum()
+            qtd_frac = pd.to_numeric(df_fracao[df_fracao['chave_pallete'] == item['chave_pallet']]['qtd'], errors='coerce').sum()
             qtd += qtd_frac
+        else:
+            qtd = pd.to_numeric(df_remessa[df_remessa['ITEM'] == sku]['QUANTIDADE'], errors='coerce').sum()
 
         total_quantidade += qtd
 
@@ -543,7 +647,7 @@ class App(ctk.CTk):
         path_base_sobrepeso = os.path.join(fonte_dir, "Base_sobrepeso_real.xlsx")
         path_base_expedicao = os.path.join(fonte_dir, "expedicao.xlsx")
         path_base_sap = os.path.join(fonte_dir, "base_sap.xlsx")
-        path_base_frac = os.path.join(fonte_dir, "FRACAO.xlsx")
+        path_base_frac = os.path.join(fonte_dir, "FRACAO_1.xlsx")
         df_frac=pd.read_excel(path_base_frac, sheet_name="Sheet1")
         df_sap = pd.read_excel(path_base_sap, sheet_name="Sheet1")
         df_expedicao = pd.read_excel(path_base_expedicao, sheet_name="dado_exp")
