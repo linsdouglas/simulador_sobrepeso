@@ -17,6 +17,7 @@ import os
 import threading
 import glob
 import subprocess
+from collections import defaultdict
 
 def encontrar_pasta_onedrive_empresa():
     user_dir = os.environ["USERPROFILE"]
@@ -64,12 +65,25 @@ def print_pdf(file_path, impressora="VITLOG01A01", sumatra_path="C:\\Program Fil
         print(f"Output: {e.output}")
         print(f"Stderr: {e.stderr}")
 
-def integrar_itens_detalhados(df_remessa, df_sap, df_sobrepeso_real, log_callback):
+def integrar_itens_detalhados(df_remessa, df_sap, df_sobrepeso_real, df_sku, df_base_fisica, log_callback):
     itens_detalhados = []
+
     for _, row in df_remessa.iterrows():
         sku = row['ITEM']
         chave_pallet = row.get('CHAVE_PALETE', None)
+        qtd = pd.to_numeric(row.get('QUANTIDADE', 0), errors='coerce')
         sp = 0.0
+        origem = 'fixo'
+        ajuste_sp = 0.0
+
+        peso_base_liq = 0
+        peso_caixa_liq = pd.to_numeric(
+            df_sku[df_sku['COD_PRODUTO'] == sku].iloc[0]['QTDE_PESO_LIQ'],
+            errors='coerce'
+        ) if not df_sku[df_sku['COD_PRODUTO'] == sku].empty else 0
+
+        if pd.notna(qtd) and pd.notna(peso_caixa_liq):
+            peso_base_liq = float(qtd) * float(peso_caixa_liq)
 
         if pd.notna(chave_pallet) and chave_pallet in df_sap['Chave Pallet'].values:
             try:
@@ -80,8 +94,9 @@ def integrar_itens_detalhados(df_remessa, df_sap, df_sobrepeso_real, log_callbac
                 hora_fim = f"{lote_info['Hora de modificação'].hour:02d}:00:00"
                 linha_coluna = "L" + lote[-3:] if isinstance(lote, str) and len(lote) >= 2 else "LB00"
                 if linha_coluna in ['LB06', 'LB07']:
-                    linha_coluna='LB06/07'
+                    linha_coluna = 'LB06/07'
                 log_callback(f"Linha produzida ajustada: {linha_coluna}")
+
                 df_sp_filtro = df_sobrepeso_real[
                     (df_sobrepeso_real['DataHora'] >= pd.to_datetime(f"{data_producao} {hora_inicio}")) &
                     (df_sobrepeso_real['DataHora'] <= pd.to_datetime(f"{data_producao} {hora_fim}"))
@@ -91,19 +106,26 @@ def integrar_itens_detalhados(df_remessa, df_sap, df_sobrepeso_real, log_callbac
                     sp_valores = df_sp_filtro[linha_coluna].fillna(0)
                     if not sp_valores.empty:
                         media_sp = sp_valores.mean() / 100
-                        log_callback(f"[{linha_coluna}] Média SP para SKU {sku}: {media_sp:.4f}")
                         sp = media_sp
-                        itens_detalhados.append({'sku': sku, 'sp': round(sp, 4), 'origem': 'real'})
-                        continue
+                        origem = 'real'
+                        ajuste_sp = peso_base_liq * sp
 
             except Exception as e:
-                log_callback(f"Erro ao calcular SP para pallet {chave_pallet}: {e}")
-        else:
-            sp_valor, _ = calculo_sobrepeso_fixo(sku, df_base_fisica, 0, log_callback)
-            itens_detalhados.append({'sku': sku, 'sp': round(sp_valor, 4)})
-            continue
+                log_callback(f"Erro ao calcular SP real para pallet {chave_pallet}: {e}")
 
+        if origem == 'fixo':
+            sp, ajuste_sp = calculo_sobrepeso_fixo(sku, df_base_fisica, peso_base_liq, log_callback)
+
+        itens_detalhados.append({
+            'sku': sku,
+            'chave_pallet': chave_pallet if pd.notna(chave_pallet) else 'N/A',
+            'sp': round(sp, 4),
+            'ajuste_sp': round(ajuste_sp, 2),
+            'origem': origem
+        })
+    log_callback(f"Total de itens detalhados integrados: {len(itens_detalhados)} de {len(df_remessa)} linhas da remessa.")
     return itens_detalhados
+
 
 def calculo_sobrepeso_fixo(sku, df_base_fisica, peso_base_liq, log_callback):
     try:
@@ -127,7 +149,16 @@ def calculo_sobrepeso_fixo(sku, df_base_fisica, peso_base_liq, log_callback):
         log_callback(f"Erro ao buscar sobrepeso fixo para SKU {sku}: {e}")
         return 0, 0
 
-    
+def buscar_chave_por_endereco(endereco, df_estoque_sep):
+    if pd.isna(endereco) or endereco == '':
+        return None
+    df_filtrado = df_estoque_sep[df_estoque_sep['endereco'] == endereco]
+    if df_filtrado.empty:
+        return None
+    df_ordenado = df_filtrado.sort_values(by='Criado', ascending=False)
+    return df_ordenado.iloc[0]['chave_pallete']
+
+
 def processar_sobrepeso(chave_pallet, sku, peso_base_liq, df_sap, df_sobrepeso_real, df_base_fisica, log_callback):
     sp = 0
     origem_sp = 'não encontrado'
@@ -219,7 +250,8 @@ def processar_sobrepeso_fixo_basico(sku, qtd, df_sku, df_base_fisica, peso_base_
     return peso_base_total, peso_base_total_liq, sp_total
 
 
-def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedicao, df_sku, df_sap, df_sobrepeso_real, df_base_fisica, df_frac, log_callback):
+def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedicao, df_sku, df_sap, df_sobrepeso_real, df_base_fisica, df_frac, df_estoque_sep, log_callback):
+    from collections import defaultdict
     try:
         remessa_num = int(remessa_num)
     except ValueError:
@@ -231,12 +263,17 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
         log_callback("Remessa não encontrada em data_exp.")
         return None
 
+    contador_exp = defaultdict(int)
+    for _, row in df_remessa.iterrows():
+        key = (row['ITEM'], row['QUANTIDADE'])
+        contador_exp[key] += 1
+
     peso_base_total = 0
     peso_base_total_liq = 0
     sp_total = 0
     itens_detalhados = []
-
     chaves_pallet_processadas = set()
+
     df_expedicao_sem_pallet = df_remessa[df_remessa['CHAVE_PALETE'].isna()]
     pacotes_expedicao = df_expedicao_sem_pallet.groupby(['ITEM', 'QUANTIDADE']).size().reset_index(name='count')
 
@@ -256,8 +293,12 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
 
         for idx in range(qtd_real):
             frac_row = df_frac_match.iloc[idx]
-            chave_frac = frac_row['chave_pallete']
-            if chave_frac in chaves_pallet_processadas:
+            chave_frac = frac_row.get('chave_pallete')
+            if pd.isna(chave_frac) or chave_frac == '':
+                endereco = frac_row.get('endereco')
+                chave_frac = buscar_chave_por_endereco(endereco, df_estoque_sep)
+
+            if chave_frac in chaves_pallet_processadas or pd.isna(chave_frac):
                 continue
             chaves_pallet_processadas.add(chave_frac)
 
@@ -277,7 +318,10 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
 
             peso_base_liq = float(peso_liq) * float(qtd_validada) if pd.notna(peso_liq) and pd.notna(qtd_validada) else 0
             peso_base_total_liq += peso_base_liq
-            peso_base_total += pd.to_numeric(df_sku_filtrado.iloc[0]['QTDE_PESO_BRU'], errors='coerce') * float(qtd_validada) if pd.notna(qtd_validada) else 0
+
+            peso_bruto = pd.to_numeric(df_sku_filtrado.iloc[0]['QTDE_PESO_BRU'], errors='coerce')
+            peso_base = float(peso_bruto) * float(qtd_validada) if pd.notna(peso_bruto) and pd.notna(qtd_validada) else 0
+            peso_base_total += peso_base
 
             sp, origem_sp, ajuste_sp = processar_sobrepeso(chave_frac, sku, peso_base_liq, df_sap, df_sobrepeso_real, df_base_fisica, log_callback)
             sp_total += ajuste_sp
@@ -337,10 +381,14 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
     peso_total_com_paletes = peso_com_sobrepeso + (qtd_paletes * 26) + peso_veiculo_vazio
     log_callback(f"Peso total com paletes ({qtd_paletes} x 26kg): {peso_total_com_paletes:.2f} kg")
 
-    media_sp_geral = (sum(item['sp'] for item in itens_detalhados) / len(itens_detalhados)) if itens_detalhados else 0.0
-    log_callback(f"Média geral de sobrepeso (entre {len(itens_detalhados)} itens): {media_sp_geral:.4f}")
+    itens_detalhados_integrados = integrar_itens_detalhados(
+        df_remessa, df_sap, df_sobrepeso_real, df_sku, df_base_fisica, log_callback
+    )
 
-    return peso_base_total, sp_total, peso_com_sobrepeso, peso_total_com_paletes, media_sp_geral, itens_detalhados
+    media_sp_geral = (sum(item['sp'] for item in itens_detalhados_integrados) / len(itens_detalhados_integrados)) if itens_detalhados_integrados else 0.0
+    log_callback(f"Média geral de sobrepeso (entre {len(itens_detalhados_integrados)} itens): {media_sp_geral:.4f}")
+
+    return peso_base_total, sp_total, peso_com_sobrepeso, peso_total_com_paletes, media_sp_geral, itens_detalhados_integrados
 
 
 def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_familia, df_sobrepeso_tabela, df_sku, df_remessa, df_fracao, log_callback):
@@ -348,12 +396,17 @@ def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_f
     quantidade_com_sp_real = 0
     ponderador_pos = 0
     ponderador_neg = 0
+    skus_contabilizados = set()
 
     for item in itens_detalhados:
         sku = item['sku']
         sp = item.get('sp', 0)
         origem = item.get('origem', 'fixo')
         qtd = 0
+
+        if sku in skus_contabilizados:
+            continue
+        skus_contabilizados.add(sku)
 
         if 'chave_pallet' in item and item['chave_pallet'] in df_fracao['chave_pallete'].values:
             qtd_frac = pd.to_numeric(df_fracao[df_fracao['chave_pallete'] == item['chave_pallet']]['qtd'], errors='coerce').sum()
@@ -369,12 +422,12 @@ def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_f
                 ponderador_pos += sp * qtd
             elif sp < 0:
                 ponderador_neg += abs(sp) * qtd
+        elif origem == 'fixo':
+            pass 
+        else:
+            log_callback(f"Origem não reconhecida: {origem}. Tratando como fixo.")
 
-    if total_quantidade == 0:
-        proporcao_sp_real = 0
-    else:
-        proporcao_sp_real = quantidade_com_sp_real / total_quantidade
-
+    proporcao_sp_real = quantidade_com_sp_real / total_quantidade if total_quantidade > 0 else 0
     log_callback(f"Total de quantidade: {total_quantidade}, com SP Real: {quantidade_com_sp_real}, proporção: {proporcao_sp_real:.2%}")
 
     if proporcao_sp_real >= 0.5:
@@ -384,7 +437,6 @@ def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_f
         else:
             media_positiva = 0.02
             media_negativa = 0.01
-
         log_callback("Mais de 50% da quantidade com SP Real. Usando médias ponderadas:")
         log_callback(f"Sobrepeso para mais (real): {media_positiva:.4f}")
         log_callback(f"Sobrepeso para menos (real): {media_negativa:.4f}")
@@ -408,6 +460,10 @@ def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_f
         else:
             row = df_sobrepeso_tabela.loc[df_sobrepeso_tabela.index.str.contains("MIX", case=False)]
 
+        if row.empty:
+            log_callback("Família não encontrada na tabela. Usando MIX como fallback.")
+            row = df_sobrepeso_tabela.loc[df_sobrepeso_tabela.index.str.contains("MIX", case=False)]
+
         media_positiva = row['(+)'].values[0]
         media_negativa = row['(-)'].values[0]
 
@@ -415,6 +471,7 @@ def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_f
         log_callback(f"Sobrepeso para menos (físico): {media_negativa:.4f}")
 
     return media_positiva, media_negativa, proporcao_sp_real
+
 
 def preencher_formulario_com_openpyxl(path_copia, dados, itens_detalhados, log_callback,df_sku, df_remessa, df_fracao):
     try:
@@ -664,6 +721,8 @@ class App(ctk.CTk):
         path_base_expedicao = os.path.join(fonte_dir, "expedicao.xlsx")
         path_base_sap = os.path.join(fonte_dir, "base_sap.xlsx")
         path_base_frac = os.path.join(fonte_dir, "FRACAO_1.xlsx")
+        path_base_estoque = os.path.join(fonte_dir, "estoqueseparacao.xlsx")
+        df_estoque_sep = pd.read_excel(path_base_estoque)
         df_frac=pd.read_excel(path_base_frac, sheet_name="FRACAO")
         df_sap = pd.read_excel(path_base_sap, sheet_name="Sheet1")
         df_expedicao = pd.read_excel(path_base_expedicao, sheet_name="dado_exp")
@@ -671,8 +730,6 @@ class App(ctk.CTk):
         df_sobrepeso_real['DataHora'] = pd.to_datetime(df_sobrepeso_real['DataHora'])
         df_base_fisica = pd.read_excel(caminho_base_fisica, sheet_name="BASE FISICA")
         df_fracao = pd.read_excel(path_base_frac, sheet_name="FRACAO")
-
-
         try:
             self.log_text.clear()
             self.log_display.configure(text="")
@@ -696,7 +753,7 @@ class App(ctk.CTk):
             self.add_log("Iniciando cálculo do peso final...")
             resultado = calcular_peso_final(
                 remessa, peso_vazio, qtd_paletes,
-                df_expedicao, df_sku, df_sap, df_sobrepeso_real,df_base_fisica, df_frac,
+                df_expedicao, df_sku, df_sap, df_sobrepeso_real,df_base_fisica, df_frac,df_estoque_sep,
                 self.add_log
             )
 
@@ -718,7 +775,15 @@ class App(ctk.CTk):
                 }
 
                 self.add_log("Chamando preenchimento do formulário via COM...")
-                preencher_formulario_com_openpyxl(file_path, dados, itens_detalhados, self.add_log, df_sku, df_remessa,df_fracao)
+                itens_detalhados_integrados = integrar_itens_detalhados(
+                    df_remessa, df_sap, df_sobrepeso_real, df_sku, df_base_fisica, self.add_log
+                )
+
+                preencher_formulario_com_openpyxl(
+                    file_path, dados, itens_detalhados_integrados, self.add_log,
+                    df_sku, df_remessa, df_fracao
+                )
+
 
 
                 self.add_log("Exportando PDF...")
