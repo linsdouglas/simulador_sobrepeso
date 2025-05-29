@@ -185,6 +185,40 @@ def processar_sobrepeso(chave_pallet, sku, peso_base_liq, df_sap, df_sobrepeso_r
 
     return sp, origem_sp, ajuste_sp
 
+def processar_sobrepeso_fixo_basico(sku, qtd, df_sku, df_base_fisica, peso_base_total, peso_base_total_liq, sp_total, itens_detalhados, log_callback):
+    df_sku_filtrado = df_sku[df_sku['COD_PRODUTO'] == sku]
+    if df_sku_filtrado.empty:
+        log_callback(f"SKU {sku} não encontrado na base SKU.")
+        return peso_base_total, peso_base_total_liq, sp_total
+
+    peso_por_caixa_bruto = pd.to_numeric(df_sku_filtrado.iloc[0]['QTDE_PESO_BRU'], errors='coerce')
+    peso_por_caixa_liquido = pd.to_numeric(df_sku_filtrado.iloc[0]['QTDE_PESO_LIQ'], errors='coerce')
+    qtd_validada = pd.to_numeric(qtd, errors='coerce')
+
+    peso_base = peso_base_liq = 0
+
+    if pd.notna(peso_por_caixa_bruto) and pd.notna(qtd_validada):
+        peso_base = float(peso_por_caixa_bruto) * float(qtd_validada)
+        peso_base_total += peso_base
+
+    if pd.notna(peso_por_caixa_liquido) and pd.notna(qtd_validada):
+        peso_base_liq = float(peso_por_caixa_liquido) * float(qtd_validada)
+        peso_base_total_liq += peso_base_liq
+
+    sp_valor, ajuste_sp = calculo_sobrepeso_fixo(sku, df_base_fisica, peso_base_liq, log_callback)
+    sp_total += ajuste_sp
+
+    itens_detalhados.append({
+        'sku': sku,
+        'chave_pallet': 'N/A',
+        'sp': round(sp_valor, 4),
+        'ajuste_sp': round(ajuste_sp, 2),
+        'origem': 'fixo'
+    })
+
+    return peso_base_total, peso_base_total_liq, sp_total
+
+
 def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedicao, df_sku, df_sap, df_sobrepeso_real, df_base_fisica, df_frac, log_callback):
     try:
         remessa_num = int(remessa_num)
@@ -203,16 +237,16 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
     itens_detalhados = []
 
     chaves_pallet_processadas = set()
-
     df_expedicao_sem_pallet = df_remessa[df_remessa['CHAVE_PALETE'].isna()]
     pacotes_expedicao = df_expedicao_sem_pallet.groupby(['ITEM', 'QUANTIDADE']).size().reset_index(name='count')
 
     for _, pacote in pacotes_expedicao.iterrows():
         sku = pacote['ITEM']
-        qtd = pacote['QUANTIDADE']
-        count_expedicao = pacote['count']
+        qtd = pd.to_numeric(pacote['QUANTIDADE'], errors='coerce')
+        count_expedicao = int(pacote['count'])
 
-        df_frac_match = df_frac[(df_frac['remessa'] == remessa_num) & (df_frac['SKU'] == sku) & (df_frac['qtd'] == qtd)]
+        df_frac_match = df_frac[(df_frac['remessa'] == remessa_num) & (df_frac['sku'] == sku)]
+        df_frac_match = df_frac_match[pd.to_numeric(df_frac_match['qtd'], errors='coerce') == qtd]
         count_fracao = len(df_frac_match)
 
         qtd_real = min(count_expedicao, count_fracao)
@@ -228,7 +262,6 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
             chaves_pallet_processadas.add(chave_frac)
 
             pallet_info = df_sap[df_sap['Chave Pallet'] == chave_frac]
-
             if pallet_info.empty:
                 log_callback(f"Chave pallet {chave_frac} da FRACAO não encontrada na base SAP.")
                 continue
@@ -239,15 +272,14 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
                 log_callback(f"SKU {sku} não encontrado na base SKU.")
                 continue
 
-            peso_por_caixa_bruto = float(df_sku_filtrado.iloc[0]['QTDE_PESO_BRU'])
-            peso_por_caixa_liquido = float(df_sku_filtrado.iloc[0]['QTDE_PESO_LIQ'])
-            peso_base = qtd * peso_por_caixa_bruto
-            peso_base_liq = qtd * peso_por_caixa_liquido
-            peso_base_total += peso_base
+            peso_liq = pd.to_numeric(df_sku_filtrado.iloc[0]['QTDE_PESO_LIQ'], errors='coerce')
+            qtd_validada = pd.to_numeric(qtd, errors='coerce')
+
+            peso_base_liq = float(peso_liq) * float(qtd_validada) if pd.notna(peso_liq) and pd.notna(qtd_validada) else 0
             peso_base_total_liq += peso_base_liq
+            peso_base_total += pd.to_numeric(df_sku_filtrado.iloc[0]['QTDE_PESO_BRU'], errors='coerce') * float(qtd_validada) if pd.notna(qtd_validada) else 0
 
             sp, origem_sp, ajuste_sp = processar_sobrepeso(chave_frac, sku, peso_base_liq, df_sap, df_sobrepeso_real, df_base_fisica, log_callback)
-
             sp_total += ajuste_sp
 
             itens_detalhados.append({
@@ -258,41 +290,20 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
                 'origem': origem_sp
             })
 
-        for idx in range(qtd_fixo):
-            df_sku_filtrado = df_sku[df_sku['COD_PRODUTO'] == sku]
-            if df_sku_filtrado.empty:
-                log_callback(f"SKU {sku} não encontrado na base SKU.")
-                continue
+        for _ in range(qtd_fixo):
+            peso_base_total, peso_base_total_liq, sp_total = processar_sobrepeso_fixo_basico(
+                sku, qtd, df_sku, df_base_fisica,
+                peso_base_total, peso_base_total_liq, sp_total,
+                itens_detalhados, log_callback
+            )
 
-            peso_por_caixa_bruto = float(df_sku_filtrado.iloc[0]['QTDE_PESO_BRU'])
-            peso_por_caixa_liquido = float(df_sku_filtrado.iloc[0]['QTDE_PESO_LIQ'])
-            peso_base = qtd * peso_por_caixa_bruto
-            peso_base_liq = qtd * peso_por_caixa_liquido
-            peso_base_total += peso_base
-            peso_base_total_liq += peso_base_liq
-
-            sp_valor, ajuste_sp = calculo_sobrepeso_fixo(sku, df_base_fisica, peso_base_liq, log_callback)
-            sp = sp_valor
-            origem_sp = 'fixo'
-            sp_total += ajuste_sp
-
-            itens_detalhados.append({
-                'sku': sku,
-                'chave_pallet': 'N/A',
-                'sp': round(sp, 4),
-                'ajuste_sp': round(ajuste_sp, 2),
-                'origem': origem_sp
-            })
     df_expedicao_com_pallet = df_remessa[df_remessa['CHAVE_PALETE'].notna()]
-
     for _, row in df_expedicao_com_pallet.iterrows():
         sku = row['ITEM']
         chave_pallet = row['CHAVE_PALETE']
-        qtd_caixas = float(row['QUANTIDADE'])
-
-        if chave_pallet in chaves_pallet_processadas:
+        qtd_caixas = pd.to_numeric(row['QUANTIDADE'], errors='coerce')
+        if chave_pallet in chaves_pallet_processadas or pd.isna(qtd_caixas):
             continue
-
         chaves_pallet_processadas.add(chave_pallet)
 
         df_sku_filtrado = df_sku[df_sku['COD_PRODUTO'] == sku]
@@ -300,15 +311,16 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
             log_callback(f"SKU {sku} não encontrado na base SKU.")
             continue
 
-        peso_por_caixa_bruto = float(df_sku_filtrado.iloc[0]['QTDE_PESO_BRU'])
-        peso_por_caixa_liquido = float(df_sku_filtrado.iloc[0]['QTDE_PESO_LIQ'])
-        peso_base = qtd_caixas * peso_por_caixa_bruto
-        peso_base_liq = qtd_caixas * peso_por_caixa_liquido
+        peso_bruto = pd.to_numeric(df_sku_filtrado.iloc[0]['QTDE_PESO_BRU'], errors='coerce')
+        peso_liq = pd.to_numeric(df_sku_filtrado.iloc[0]['QTDE_PESO_LIQ'], errors='coerce')
+
+        peso_base = float(peso_bruto) * float(qtd_caixas) if pd.notna(peso_bruto) else 0
+        peso_base_liq = float(peso_liq) * float(qtd_caixas) if pd.notna(peso_liq) else 0
+
         peso_base_total += peso_base
         peso_base_total_liq += peso_base_liq
 
         sp, origem_sp, ajuste_sp = processar_sobrepeso(chave_pallet, sku, peso_base_liq, df_sap, df_sobrepeso_real, df_base_fisica, log_callback)
-
         sp_total += ajuste_sp
 
         itens_detalhados.append({
@@ -318,14 +330,18 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
             'ajuste_sp': round(ajuste_sp, 2),
             'origem': origem_sp
         })
+
     peso_com_sobrepeso = peso_base_total + sp_total
     log_callback(f"Peso com sobrepeso: {peso_com_sobrepeso:.2f} kg")
+
     peso_total_com_paletes = peso_com_sobrepeso + (qtd_paletes * 26) + peso_veiculo_vazio
     log_callback(f"Peso total com paletes ({qtd_paletes} x 26kg): {peso_total_com_paletes:.2f} kg")
+
     media_sp_geral = (sum(item['sp'] for item in itens_detalhados) / len(itens_detalhados)) if itens_detalhados else 0.0
     log_callback(f"Média geral de sobrepeso (entre {len(itens_detalhados)} itens): {media_sp_geral:.4f}")
 
     return peso_base_total, sp_total, peso_com_sobrepeso, peso_total_com_paletes, media_sp_geral, itens_detalhados
+
 
 def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_familia, df_sobrepeso_tabela, df_sku, df_remessa, df_fracao, log_callback):
     total_quantidade = 0
@@ -648,13 +664,13 @@ class App(ctk.CTk):
         path_base_expedicao = os.path.join(fonte_dir, "expedicao.xlsx")
         path_base_sap = os.path.join(fonte_dir, "base_sap.xlsx")
         path_base_frac = os.path.join(fonte_dir, "FRACAO_1.xlsx")
-        df_frac=pd.read_excel(path_base_frac, sheet_name="Sheet1")
+        df_frac=pd.read_excel(path_base_frac, sheet_name="FRACAO")
         df_sap = pd.read_excel(path_base_sap, sheet_name="Sheet1")
         df_expedicao = pd.read_excel(path_base_expedicao, sheet_name="dado_exp")
         df_sobrepeso_real = pd.read_excel(path_base_sobrepeso, sheet_name="SOBREPESO")
         df_sobrepeso_real['DataHora'] = pd.to_datetime(df_sobrepeso_real['DataHora'])
         df_base_fisica = pd.read_excel(caminho_base_fisica, sheet_name="BASE FISICA")
-        df_fracao = pd.read_excel(path_base_frac, sheet_name="Sheet1")
+        df_fracao = pd.read_excel(path_base_frac, sheet_name="FRACAO")
 
 
         try:
