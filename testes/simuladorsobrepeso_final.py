@@ -249,8 +249,27 @@ def processar_sobrepeso_fixo_basico(sku, qtd, df_sku, df_base_fisica, peso_base_
 
     return peso_base_total, peso_base_total_liq, sp_total
 
+def calcular_peso_receb_externo(chave_frac, frac_row, sku, df_externo_peso, df_estoque_sep, log_callback):
+    if isinstance(chave_frac, str) and '_' in chave_frac:
+        row_exter = df_externo_peso[df_externo_peso['chave_pallete'] == chave_frac]
+        if not row_exter.empty:
+            peso_real = pd.to_numeric(row_exter.iloc[0]['peso'], errors='coerce')
+            qtd_total = pd.to_numeric(
+                df_estoque_sep[df_estoque_sep['chave_pallete'] == chave_frac]['qtd'],
+                errors='coerce'
+            ).sum()
+            qtd_retirada = pd.to_numeric(frac_row.get('qtd'), errors='coerce')
 
-def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedicao, df_sku, df_sap, df_sobrepeso_real, df_base_fisica, df_frac, df_estoque_sep, log_callback):
+            if pd.notna(peso_real) and qtd_total > 0 and pd.notna(qtd_retirada):
+                peso_proporcional = peso_real * (qtd_retirada / qtd_total)
+                log_callback(f"Recebimento externo: chave={chave_frac}, peso total={peso_real}, qtd total={qtd_total}, retirada={qtd_retirada}, proporcional={peso_proporcional:.2f}")
+                return peso_proporcional
+
+    return None
+
+
+def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedicao, df_sku, df_sap, df_sobrepeso_real,
+                         df_base_fisica, df_frac, df_estoque_sep, df_externo_peso,log_callback):
     from collections import defaultdict
     try:
         remessa_num = int(remessa_num)
@@ -301,7 +320,13 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
             if chave_frac in chaves_pallet_processadas or pd.isna(chave_frac):
                 continue
             chaves_pallet_processadas.add(chave_frac)
-
+            resultado_ext = calcular_peso_receb_externo(
+            chave_frac, sku, frac_row, df_externo_peso, df_estoque_sep,
+            peso_base_total, peso_base_total_liq, itens_detalhados, log_callback
+            )
+            if resultado_ext:
+                peso_base_total, peso_base_total_liq = resultado_ext
+                continue
             pallet_info = df_sap[df_sap['Chave Pallet'] == chave_frac]
             if pallet_info.empty:
                 log_callback(f"Chave pallet {chave_frac} da FRACAO não encontrada na base SAP.")
@@ -349,7 +374,13 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
         if chave_pallet in chaves_pallet_processadas or pd.isna(qtd_caixas):
             continue
         chaves_pallet_processadas.add(chave_pallet)
-
+        resultado_ext = calcular_peso_receb_externo(
+            chave_pallet, sku, row, df_externo_peso, df_estoque_sep,
+            peso_base_total, peso_base_total_liq, itens_detalhados, log_callback
+        )
+        if resultado_ext:
+            peso_base_total, peso_base_total_liq = resultado_ext
+            continue
         df_sku_filtrado = df_sku[df_sku['COD_PRODUTO'] == sku]
         if df_sku_filtrado.empty:
             log_callback(f"SKU {sku} não encontrado na base SKU.")
@@ -722,6 +753,8 @@ class App(ctk.CTk):
         path_base_sap = os.path.join(fonte_dir, "base_sap.xlsx")
         path_base_frac = os.path.join(fonte_dir, "FRACAO_1.xlsx")
         path_base_estoque = os.path.join(fonte_dir, "estoqueseparacao.xlsx")
+        path_base_peso_exter = os.path.join(fonte_dir,"receb_extern_peso.xlsx")
+        df_externo_peso=pd.read_excel(path_base_peso_exter)
         df_estoque_sep = pd.read_excel(path_base_estoque)
         df_frac=pd.read_excel(path_base_frac, sheet_name="FRACAO")
         df_sap = pd.read_excel(path_base_sap, sheet_name="Sheet1")
@@ -753,7 +786,7 @@ class App(ctk.CTk):
             self.add_log("Iniciando cálculo do peso final...")
             resultado = calcular_peso_final(
                 remessa, peso_vazio, qtd_paletes,
-                df_expedicao, df_sku, df_sap, df_sobrepeso_real,df_base_fisica, df_frac,df_estoque_sep,
+                df_expedicao, df_sku, df_sap, df_sobrepeso_real,df_base_fisica, df_frac,df_estoque_sep,df_externo_peso,
                 self.add_log
             )
 
