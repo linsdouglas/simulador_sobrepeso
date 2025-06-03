@@ -605,7 +605,7 @@ def preencher_formulario_com_openpyxl(path_copia, dados, itens_detalhados, log_c
     except Exception as e:
         log_callback(f"Erro no preenchimento: {e}")
         raise
-    
+
 def exportar_pdf_com_comtypes(path_xlsx, aba_nome="FORMULARIO", nome_remessa="REMESSA", log_callback=None):
 
     try:
