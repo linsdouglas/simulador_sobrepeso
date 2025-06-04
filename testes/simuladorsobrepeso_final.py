@@ -141,8 +141,6 @@ def calculo_sobrepeso_fixo(sku, df_base_fisica, peso_base_liq, log_callback):
                 ajuste = float(peso_base_liq) * float(sp_fixo)
             else:
                 ajuste = 0.0
-
-            log_callback(f"SOBREPESO FIXO encontrado para SKU {sku}: {sp_fixo:.4f}")
             return sp_fixo, ajuste
         else:
             log_callback(f"Nenhum sobrepeso fixo encontrado para SKU {sku}.")
@@ -506,10 +504,11 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
     qtd_ext  = sum(1 for i in itens_detalhados_integrados if i['origem'] == 'receb_ext')
     qtd_fixo = sum(1 for i in itens_detalhados_integrados if i['origem'] == 'fixo')
 
-    log_callback(f"📦 Total de itens processados: {len(itens_detalhados_integrados)}")
-    log_callback(f"├── reais: {qtd_real}")
-    log_callback(f"├── receb_ext: {qtd_ext}")
-    log_callback(f"└── fixos: {qtd_fixo}")
+    log_callback(f"📦 Total de itens processados: {len(itens_detalhados)}")
+    log_callback(f"├── reais: {sum(1 for i in itens_detalhados if i.get('origem') in ['real', 'receb_ext'])}")
+    log_callback(f"├── receb_ext: {sum(1 for i in itens_detalhados if i.get('origem') == 'receb_ext')}")
+    log_callback(f"└── fixos: {sum(1 for i in itens_detalhados if i.get('origem') == 'fixo')}")
+
 
     return peso_base_total, sp_total, peso_com_sobrepeso, peso_total_com_paletes, media_sp_geral, itens_detalhados_integrados
 
