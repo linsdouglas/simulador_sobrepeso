@@ -18,6 +18,32 @@ import threading
 import glob
 import subprocess
 from collections import defaultdict
+import yagmail
+
+log_geral = []
+def log_callback_completo(self, mensagem):
+    print(mensagem)
+    log_geral.append(mensagem)
+    self.add_log(mensagem) 
+      
+def enviar_email_com_log_e_pdf(logs, caminho_pdf,remessa):
+    email_remetente = 'mdiasbrancoautomacao@gmail.com'
+    token = 'secwygmzlibyxhhh'  
+    email_destino = 'douglas.lins2@mdiasbranco.com.br'
+    try:
+        corpo_email = "\n".join(logs)
+        yag = yagmail.SMTP(user=email_remetente, password=token)
+        assunto = f"📦 Simulador Sobrepeso - Remessa {remessa}"
+        yag.send(
+            to=email_destino,
+            subject=assunto,
+            contents=corpo_email,
+            attachments=[caminho_pdf]
+        )
+        print("✅ E-mail enviado com sucesso.")
+    except Exception as e:
+        print(f"Erro ao enviar e-mail: {e}")
+
 
 def encontrar_pasta_onedrive_empresa():
     user_dir = os.environ["USERPROFILE"]
@@ -856,12 +882,12 @@ class App(ctk.CTk):
             self.log_display.configure(text="")
 
             file_path = criar_copia_planilha(fonte_dir, "SIMULADOR_BALANÇA_LIMPO_2.xlsx", self.add_log)
-            self.add_log(f"Abrindo planilha Excel em: {file_path}")
+            log_callback_completo(self,f"Abrindo planilha Excel em: {file_path}")
 
             xl = pd.ExcelFile(file_path)
-            self.add_log("Lendo abas do arquivos...")
+            log_callback_completo(self,"Lendo abas do arquivos...")
             df_sku = xl.parse("dado_sku")
-            self.add_log("Abas carregadas com sucesso.")
+            log_callback_completo(self,"Abas carregadas com sucesso.")
 
             peso_vazio = float(self.peso_vazio.get())
             peso_balança = float(self.peso_balanca.get())
@@ -869,9 +895,9 @@ class App(ctk.CTk):
             remessa = int(self.remessa.get())
             df_remessa = df_expedicao[df_expedicao['REMESSA'] == remessa]
 
-            self.add_log(f"Entradas: Remessa={remessa}, Peso Vazio={peso_vazio}, Paletes={qtd_paletes}")
+            log_callback_completo(self,f"Entradas: Remessa={remessa}, Peso Vazio={peso_vazio}, Paletes={qtd_paletes}")
 
-            self.add_log("Iniciando cálculo do peso final...")
+            log_callback_completo(self,"Iniciando cálculo do peso final...")
             resultado = calcular_peso_final(
                 remessa, peso_vazio, qtd_paletes,
                 df_expedicao, df_sku, df_sap, df_sobrepeso_real,df_base_fisica, df_frac,df_estoque_sep,df_externo_peso,
@@ -894,7 +920,7 @@ class App(ctk.CTk):
                     'qtd_paletes': qtd_paletes
                 }
 
-                self.add_log("Chamando preenchimento do formulário via COM...")
+                log_callback_completo(self,"Chamando preenchimento do formulário via COM...")
                 itens_detalhados_integrados = integrar_itens_detalhados(
                     df_remessa, df_sap, df_sobrepeso_real, df_sku, df_base_fisica, self.add_log
                 )
@@ -903,14 +929,11 @@ class App(ctk.CTk):
                     file_path, dados, itens_detalhados_integrados, self.add_log,
                     df_sku, df_remessa, df_fracao
                 )
-
-
-
-                self.add_log("Exportando PDF...")
+                log_callback_completo(self,"Exportando PDF...")
                 pdf_path = exportar_pdf_com_comtypes(file_path, "FORMULARIO", nome_remessa=remessa, log_callback=self.add_log)
-                self.add_log(f"PDF exportado com sucesso: {pdf_path}")
+                log_callback_completo(self,f"PDF exportado com sucesso: {pdf_path}")
 
-                self.add_log("Gerando relatório de divergência em PDF...")
+                log_callback_completo(self,"Gerando relatório de divergência em PDF...")
                 relatorio_path = gerar_relatorio_diferenca(
                     remessa_num=remessa,
                     peso_final_balança=peso_balança,
@@ -920,7 +943,7 @@ class App(ctk.CTk):
                     peso_estimado_total=peso_com_sp,
                     pasta_excel=fonte_dir
                 )
-                self.add_log(f"Relatório adicional salvo em: {relatorio_path}")
+                log_callback_completo(self,f"Relatório adicional salvo em: {relatorio_path}")
 
                 messagebox.showinfo(
                     "Sucesso",
@@ -929,19 +952,21 @@ class App(ctk.CTk):
                 print_pdf(pdf_path)  
                 print_pdf(relatorio_path)
 
+                enviar_email_com_log_e_pdf(log_geral, pdf_path, remessa)
+
                 try:
                     os.remove(file_path)
-                    self.add_log(f"Cópia temporária removida: {file_path}")
+                    log_callback_completo(self,f"Cópia temporária removida: {file_path}")
                 except Exception as e:
-                    self.add_log(f"Erro ao remover a cópia temporária: {e}")
+                    log_callback_completo(self,f"Erro ao remover a cópia temporária: {e}")
 
             else:
-                self.add_log("Falha no cálculo. Verifique os dados inseridos.")
+                log_callback_completo(self,"Falha no cálculo. Verifique os dados inseridos.")
                 messagebox.showwarning("Aviso", "Cálculo não pôde ser realizado.")
 
 
         except Exception as e:
-            self.add_log(f"Erro: {str(e)}")
+            log_callback_completo(self,f"Erro: {str(e)}")
             messagebox.showerror("Erro", f"Erro ao processar: {str(e)}")
 
 
