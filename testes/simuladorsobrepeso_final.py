@@ -40,9 +40,9 @@ def enviar_email_com_log_e_pdf(logs, caminho_pdf,remessa):
             contents=corpo_email,
             attachments=[caminho_pdf]
         )
-        print("✅ E-mail enviado com sucesso.")
+        log_callback_completo(f"✅ E-mail enviado com sucesso.")
     except Exception as e:
-        print(f"Erro ao enviar e-mail: {e}")
+        log_callback_completo(f"❌ Erro ao enviar e-mail: {e}")
 
 
 def encontrar_pasta_onedrive_empresa():
