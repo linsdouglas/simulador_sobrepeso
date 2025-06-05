@@ -516,7 +516,7 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
     peso_com_sobrepeso = peso_base_total + sp_total
     log_callback(f"Peso com sobrepeso: {peso_com_sobrepeso:.2f} kg")
 
-    peso_total_com_paletes = peso_com_sobrepeso + (qtd_paletes * 26) + peso_veiculo_vazio
+    peso_total_com_paletes = peso_com_sobrepeso + (qtd_paletes * 23) + peso_veiculo_vazio
     log_callback(f"Peso total com paletes ({qtd_paletes} x 26kg): {peso_total_com_paletes:.2f} kg")
 
     itens_detalhados_integrados = integrar_itens_detalhados(
