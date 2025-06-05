@@ -81,15 +81,15 @@ def print_pdf(file_path, impressora="VITLOG01A01", sumatra_path="C:\\Program Fil
     args = [sumatra_path, "-print-to", impressora, "-silent", file_path]
     try:
         result = subprocess.run(args, check=True, capture_output=True, text=True)
-        print(f"Arquivo impresso com sucesso: {file_path}")
+        log_callback_completo(f"Arquivo impresso com sucesso: {file_path}")
         if result.stdout:
-            print(f"stdout: {result.stdout}")
+            log_callback_completo(f"stdout: {result.stdout}")
         if result.stderr:
-            print(f"stderr: {result.stderr}")
+            log_callback_completo(f"stderr: {result.stderr}")
     except subprocess.CalledProcessError as e:
-        print(f"Erro ao imprimir {file_path}: {e}")
-        print(f"Output: {e.output}")
-        print(f"Stderr: {e.stderr}")
+        log_callback_completo(f"Erro ao imprimir {file_path}: {e}")
+        log_callback_completo(f"Output: {e.output}")
+        log_callback_completo(f"Stderr: {e.stderr}")
 
 def integrar_itens_detalhados(df_remessa, df_sap, df_sobrepeso_real, df_sku, df_base_fisica, log_callback):
     itens_detalhados = []
@@ -807,7 +807,7 @@ def gerar_relatorio_diferenca(remessa_num, peso_final_balança, peso_veiculo_vaz
         pdf.savefig(fig, bbox_inches='tight')
 
     plt.close('all')
-    print(f"Relatório salvo em: {caminho_pdf}")
+    log_callback_completo(f"Relatório salvo em: {caminho_pdf}")
     return caminho_pdf
 
 ctk.set_appearance_mode("dark")
