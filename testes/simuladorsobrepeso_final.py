@@ -12,6 +12,7 @@ import winreg
 from shutil import copyfile
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+from collections import defaultdict
 import numpy as np
 import os
 import threading
@@ -226,12 +227,14 @@ def processar_sobrepeso(chave_pallet, sku, peso_base_liq, df_sap, df_sobrepeso_r
                 if isinstance(sp, pd.Series):
                     sp = sp.iloc[0]
 
-                if pd.notna(peso_base_liq) and pd.notna(sp):
+                if pd.notna(peso_base_liq) and pd.notna(sp) and float(sp)>0:
                     ajuste_sp = float(peso_base_liq) * float(sp)
                     origem_sp = 'real'
                 else:
+                    sp=0
                     ajuste_sp = 0.0
-                    log_callback(f"Erro: peso_base_liq ou sp inválido para SKU {sku}. Ajuste SP definido como 0.")
+                    origem_sp='fixo'
+                    log_callback(f"Erro: peso_base_liq ou sp inválido (verificar se há a data ou chave pallete na base) para SKU {sku}. Ajuste SP definido como 0.")
         else:
             log_callback(f"Coluna {linha_coluna} não encontrada na base de sobrepeso.")
 
@@ -547,36 +550,41 @@ def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_f
     quantidade_com_sp_real = 0
     ponderador_pos = 0
     ponderador_neg = 0
-    skus_contabilizados = set()
 
+    agrupado_por_sku = defaultdict(list)
     for item in itens_detalhados:
-        sku = item['sku']
-        sp = item.get('sp', 0)
-        origem = item.get('origem', 'fixo')
-        qtd = 0
+        agrupado_por_sku[item['sku']].append(item)
 
-        if sku in skus_contabilizados:
-            continue
-        skus_contabilizados.add(sku)
+    for sku, itens in agrupado_por_sku.items():
+        qtd_total = 0
+        qtd_real = 0
+        ponderador_pos_local = 0
+        ponderador_neg_local = 0
 
-        if 'chave_pallet' in item and item['chave_pallet'] in df_fracao['chave_pallete'].values:
-            qtd_frac = pd.to_numeric(df_fracao[df_fracao['chave_pallete'] == item['chave_pallet']]['qtd'], errors='coerce').sum()
-            qtd += qtd_frac
-        else:
-            qtd = pd.to_numeric(df_remessa[df_remessa['ITEM'] == sku]['QUANTIDADE'], errors='coerce').sum()
+        for item in itens:
+            origem = item.get('origem', 'fixo')
+            sp = item.get('sp', 0)
+            chave = item.get('chave_pallet', '')
+            qtd = 0
 
-        total_quantidade += qtd
+            if chave in df_fracao['chave_pallete'].values:
+                qtd = pd.to_numeric(df_fracao[df_fracao['chave_pallete'] == chave]['qtd'], errors='coerce').sum()
+            else:
+                qtd = pd.to_numeric(df_remessa[df_remessa['ITEM'] == sku]['QUANTIDADE'], errors='coerce').sum()
 
-        if origem in ['real', 'receb_ext']:
-            quantidade_com_sp_real += qtd
-            if sp > 0:
-                ponderador_pos += sp * qtd
-            elif sp < 0:
-                ponderador_neg += abs(sp) * qtd
-        elif origem == 'fixo':
-            pass 
-        else:
-            log_callback(f"Origem não reconhecida: {origem}. Tratando como fixo.")
+            qtd_total += qtd
+
+            if origem in ['real', 'receb_ext']:
+                qtd_real += qtd
+                if sp > 0:
+                    ponderador_pos_local += sp * qtd
+                elif sp < 0:
+                    ponderador_neg_local += abs(sp) * qtd
+
+        total_quantidade += qtd_total
+        quantidade_com_sp_real += qtd_real
+        ponderador_pos += ponderador_pos_local
+        ponderador_neg += ponderador_neg_local
 
     proporcao_sp_real = quantidade_com_sp_real / total_quantidade if total_quantidade > 0 else 0
     log_callback(f"Total de quantidade: {total_quantidade}, com SP Real: {quantidade_com_sp_real}, proporção: {proporcao_sp_real:.2%}")
@@ -594,8 +602,7 @@ def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_f
     else:
         log_callback("Menos de 50% da quantidade com SP Real. Usando tabela de sobrepeso físico.")
         familias = set()
-        for item in itens_detalhados:
-            sku = item['sku']
+        for sku in agrupado_por_sku:
             familia = df_base_familia.loc[df_base_familia['CÓD'] == sku, 'FAMILIA 2']
             if not familia.empty:
                 familias.add(familia.values[0])
