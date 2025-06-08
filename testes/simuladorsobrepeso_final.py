@@ -560,6 +560,7 @@ def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_f
         qtd_real = 0
         ponderador_pos_local = 0
         ponderador_neg_local = 0
+        familia_detectada = "MIX"  
 
         for item in itens:
             origem = item.get('origem', 'fixo')
@@ -621,6 +622,16 @@ def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_f
         if row.empty:
             log_callback("Família não encontrada na tabela. Usando MIX como fallback.")
             row = df_sobrepeso_tabela.loc[df_sobrepeso_tabela.index.str.contains("MIX", case=False)]
+        
+        if 'BISCOITO' in familia.upper():
+            row = df_sobrepeso_tabela.loc[df_sobrepeso_tabela.index.str.contains("BISCOITO", case=False)]
+            familia_detectada = "BISCOITO"
+        elif 'MASSA' in familia.upper():
+            row = df_sobrepeso_tabela.loc[df_sobrepeso_tabela.index.str.contains("MASSA", case=False)]
+            familia_detectada = "MASSA"
+        else:
+            row = df_sobrepeso_tabela.loc[df_sobrepeso_tabela.index.str.contains("MIX", case=False)]
+            familia_detectada = "MIX"
 
         media_positiva = row['(+)'].values[0]
         media_negativa = row['(-)'].values[0]
@@ -628,7 +639,7 @@ def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_f
         log_callback(f"Sobrepeso para mais (físico): {media_positiva:.4f}")
         log_callback(f"Sobrepeso para menos (físico): {media_negativa:.4f}")
 
-    return media_positiva, media_negativa, proporcao_sp_real
+    return media_positiva, media_negativa, proporcao_sp_real, familia_detectada
 
 def preencher_formulario_com_openpyxl(path_copia, dados, itens_detalhados, log_callback,df_sku, df_remessa, df_fracao):
     try:
@@ -639,7 +650,7 @@ def preencher_formulario_com_openpyxl(path_copia, dados, itens_detalhados, log_c
         index = ['CARGA COM MIX', 'EXCLUSIVO MASSAS', 'EXCLUSIVO BISCOITOS']
         df_sobrepeso_tabela = pd.DataFrame(dados_tabela, index=index)
         df_base_familia = pd.read_excel(caminho_base_fisica, 'BASE_FAMILIA')
-        sp_pos, sp_neg, proporcao_sp_real = calcular_limites_sobrepeso_por_quantidade(
+        sp_pos, sp_neg, proporcao_sp_real, familia_detectada = calcular_limites_sobrepeso_por_quantidade(
             dados, itens_detalhados, df_base_familia, df_sobrepeso_tabela, df_sku, df_remessa, df_fracao, log_callback
         )
         wb = load_workbook(path_copia)
@@ -649,6 +660,7 @@ def preencher_formulario_com_openpyxl(path_copia, dados, itens_detalhados, log_c
         ws["A16"] = f"Sobrepeso para (+): {sp_pos*100:.2f}%"
         ws["A18"] = f"Sobrepeso para (-): {sp_neg*100:.2f}%"
         ws["D7"] = f"{proporcao_sp_real*100:.2f}% x {(1 - proporcao_sp_real)*100:.2f}%"
+        ws["B5"] = familia_detectada
         ws["B4"] = dados['remessa']
         ws["B6"] = dados['qtd_skus']
         ws["B7"] = dados['placa']
@@ -995,10 +1007,6 @@ class App(ctk.CTk):
                 )
                 self.log_callback_completo(f"Relatório adicional salvo em: {relatorio_path}")
 
-                messagebox.showinfo(
-                    "Sucesso",
-                    f"Formulário exportado: {pdf_path}\n\nRelatório de divergência salvo:\n{relatorio_path}"
-                )
                 try:
                     self.log_callback_completo("Iniciando impressão do relatório")
                     print_pdf(pdf_path, log_callback=self.log_callback_completo)
@@ -1025,6 +1033,11 @@ class App(ctk.CTk):
                     self.log_callback_completo(f"Cópia temporária removida: {file_path}")
                 except Exception as e:
                     self.log_callback_completo(f"Erro ao remover a cópia temporária: {e}")
+                
+                messagebox.showinfo(
+                    "Sucesso",
+                    f"Formulário exportado: {pdf_path}\n\nRelatório de divergência salvo:\n{relatorio_path}"
+                )
 
             else:
                 self.log_callback_completo("Falha no cálculo. Verifique os dados inseridos.")
