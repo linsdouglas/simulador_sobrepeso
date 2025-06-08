@@ -841,6 +841,8 @@ class App(ctk.CTk):
         self.grid_columnconfigure(1, weight=1)
         formulario_frame = ctk.CTkFrame(self)
         formulario_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+        footer_label = ctk.CTkLabel(self, text="Desenvolvido por Douglas Lins - Analista de Logística", font=("Arial", 10), anchor="center")
+        footer_label.grid(row=1, column=0, columnspan=2, pady=(0, 10))
         ctk.CTkLabel(formulario_frame, text="Placa:").pack(anchor="w")
         ctk.CTkEntry(formulario_frame, textvariable=self.placa).pack(fill="x")
         ctk.CTkLabel(formulario_frame, text="Turno:").pack(anchor="w")
