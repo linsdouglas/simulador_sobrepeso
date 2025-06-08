@@ -19,32 +19,11 @@ import glob
 import subprocess
 from collections import defaultdict
 import yagmail
+import time
+import gc
 
 log_geral = []
-def log_callback_completo(self, mensagem):
-    print(mensagem)
-    log_geral.append(mensagem)
-    self.add_log(mensagem) 
-      
-def enviar_email_com_log_e_pdf(logs, caminho_pdf,remessa):
-    email_remetente = 'mdiasbrancoautomacao@gmail.com'
-    token = 'secwygmzlibyxhhh'  
-    email_destino = 'douglas.lins2@mdiasbranco.com.br'
-    try:
-        corpo_email = "\n".join(logs)
-        yag = yagmail.SMTP(user=email_remetente, password=token)
-        assunto = f"📦 Simulador Sobrepeso - Remessa {remessa}"
-        yag.send(
-            to=email_destino,
-            subject=assunto,
-            contents=corpo_email,
-            attachments=[caminho_pdf]
-        )
-        log_callback_completo(f"✅ E-mail enviado com sucesso.")
-    except Exception as e:
-        log_callback_completo(f"❌ Erro ao enviar e-mail: {e}")
-
-
+ 
 def encontrar_pasta_onedrive_empresa():
     user_dir = os.environ["USERPROFILE"]
     possiveis = os.listdir(user_dir)
@@ -77,19 +56,44 @@ def criar_copia_planilha(fonte_dir, nome_arquivo, log_callback):
         log_callback(f"Erro ao criar cópia da planilha: {e}")
         raise
 
-def print_pdf(file_path, impressora="VITLOG01A01", sumatra_path="C:\\Program Files\\SumatraPDF\\SumatraPDF.exe"):
+def enviar_email_com_log_e_pdf(caminho_pdf, remessa, log_callback=None, log_geral=None):
+    import yagmail
+    email_remetente = 'mdiasbrancoautomacao@gmail.com'
+    token = 'secwygmzlibyxhhh'  
+    email_destino = 'douglas.lins2@mdiasbranco.com.br'
+
+    try:
+        corpo_email = "\n".join(log_geral or ["(Sem logs técnicos disponíveis)"])
+        yag = yagmail.SMTP(user=email_remetente, password=token)
+        assunto = f"📦 Simulador Sobrepeso - Remessa {remessa}"
+        yag.send(
+            to=email_destino,
+            subject=assunto,
+            contents=corpo_email,
+            attachments=[caminho_pdf]
+        )
+        if log_callback:
+            log_callback(f"E-mail enviado com sucesso para {email_destino}")
+    except Exception as e:
+        if log_callback:
+            log_callback(f"Erro ao enviar e-mail: {e}")
+
+def print_pdf(file_path, impressora="VITLOG01A01", sumatra_path="C:\\Program Files\\SumatraPDF\\SumatraPDF.exe", log_callback=None):
+    import subprocess
     args = [sumatra_path, "-print-to", impressora, "-silent", file_path]
     try:
         result = subprocess.run(args, check=True, capture_output=True, text=True)
-        log_callback_completo(f"Arquivo impresso com sucesso: {file_path}")
-        if result.stdout:
-            log_callback_completo(f"stdout: {result.stdout}")
-        if result.stderr:
-            log_callback_completo(f"stderr: {result.stderr}")
+        if log_callback:
+            log_callback(f"Arquivo impresso com sucesso: {file_path}")
+            if result.stdout:
+                log_callback(f"stdout: {result.stdout}")
+            if result.stderr:
+                log_callback(f"stderr: {result.stderr}")
     except subprocess.CalledProcessError as e:
-        log_callback_completo(f"Erro ao imprimir {file_path}: {e}")
-        log_callback_completo(f"Output: {e.output}")
-        log_callback_completo(f"Stderr: {e.stderr}")
+        if log_callback:
+            log_callback(f"Erro ao imprimir {file_path}: {e}")
+            log_callback(f"Output: {e.output}")
+            log_callback(f"Stderr: {e.stderr}")
 
 def integrar_itens_detalhados(df_remessa, df_sap, df_sobrepeso_real, df_sku, df_base_fisica, log_callback):
     itens_detalhados = []
@@ -326,7 +330,7 @@ def calcular_peso_receb_externo(chave, sku, row, df_externo_peso, df_estoque_sep
                 break
 
         if pd.isna(qtd_expedida):
-            log_callback("❌ Quantidade expedida inválida ou ausente para recebimento externo.")
+            log_callback("Quantidade expedida inválida ou ausente para recebimento externo.")
             return None
 
 
@@ -408,7 +412,7 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
         df_frac_same_remessa = df_frac[df_frac['remessa'] == remessa_num]
         skus_frac = df_frac_same_remessa['sku'].unique()
         if len(skus_frac) > 0 and sku not in skus_frac:
-            log_callback(f"⚠️ Remessa {remessa_num} encontrada na base FRACAO, mas com SKUs diferentes do esperado: {skus_frac.tolist()} — SKU da linha atual: {sku}. Pode haver divergência nos dados.")
+            log_callback(f"Remessa {remessa_num} encontrada na base FRACAO, mas com SKUs diferentes do esperado: {skus_frac.tolist()} — SKU da linha atual: {sku}. Pode haver divergência nos dados.")
 
         count_fracao = len(df_frac_match)
 
@@ -674,6 +678,7 @@ def preencher_formulario_com_openpyxl(path_copia, dados, itens_detalhados, log_c
             ws[f"D{linha}"] = f"{item['sp']*100:.3f}"
 
         wb.save(path_copia)
+        wb.close()
         log_callback("Formulário preenchido e salvo com sucesso.")
 
     except Exception as e:
@@ -681,7 +686,6 @@ def preencher_formulario_com_openpyxl(path_copia, dados, itens_detalhados, log_c
         raise
 
 def exportar_pdf_com_comtypes(path_xlsx, aba_nome="FORMULARIO", nome_remessa="REMESSA", log_callback=None):
-
     try:
         if log_callback:
             log_callback("Iniciando exportação via comtypes...")
@@ -700,28 +704,27 @@ def exportar_pdf_com_comtypes(path_xlsx, aba_nome="FORMULARIO", nome_remessa="RE
 
         pdf_dir = os.path.join(fonte_dir, 'Relatório_Saida')
         os.makedirs(pdf_dir, exist_ok=True)
-
         pdf_path = os.path.join(pdf_dir, f"SOBREPESOSIMULADO - {nome_remessa}.pdf")
-
         if log_callback:
             log_callback(f"Tentando exportar para: {pdf_path}")
-
         ws.ExportAsFixedFormat(Type=0, Filename=pdf_path)
-        wb.Close(False)
+        wb.Close(SaveChanges=False)
         excel.Quit()
+        del ws
+        del wb
+        del excel
+        gc.collect()
         comtypes.CoUninitialize()
-
+        time.sleep(5)
         if log_callback:
             log_callback(f"PDF exportado com sucesso: {pdf_path}")
-
         return pdf_path
-
     except Exception as e:
         if log_callback:
             log_callback(f"Erro ao exportar PDF: {e}")
         raise
 
-def gerar_relatorio_diferenca(remessa_num, peso_final_balança, peso_veiculo_vazio, df_remessa, df_sku, peso_estimado_total, pasta_excel):
+def gerar_relatorio_diferenca(remessa_num, peso_final_balança, peso_veiculo_vazio, df_remessa, df_sku, peso_estimado_total, pasta_excel,log_callback):
     import os
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_pdf import PdfPages
@@ -807,7 +810,7 @@ def gerar_relatorio_diferenca(remessa_num, peso_final_balança, peso_veiculo_vaz
         pdf.savefig(fig, bbox_inches='tight')
 
     plt.close('all')
-    log_callback_completo(f"Relatório salvo em: {caminho_pdf}")
+    log_callback(f"Relatório salvo em: {caminho_pdf}")
     return caminho_pdf
 
 ctk.set_appearance_mode("dark")
@@ -816,8 +819,10 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Simulador de Sobrepeso")
-        self.geometry("700x600")
+        self.geometry("1000x600")
 
+        self.log_tecnico = []
+        self.log_geral = []
         self.placa = StringVar()
         self.turno = StringVar()
         self.remessa = StringVar()
@@ -825,43 +830,72 @@ class App(ctk.CTk):
         self.peso_vazio = StringVar()
         self.peso_balanca = StringVar()
         self.log_text = []
-
-        ctk.CTkLabel(self, text="Placa:").pack()
-        ctk.CTkEntry(self, textvariable=self.placa).pack()
-
-        ctk.CTkLabel(self, text="Turno:").pack()
-        ctk.CTkComboBox(self, values=["A", "B", "C"], variable=self.turno).pack()
-
-        ctk.CTkLabel(self, text="Remessa:").pack()
-        ctk.CTkEntry(self, textvariable=self.remessa).pack()
-
-        ctk.CTkLabel(self, text="Quantidade de Paletes:").pack()
-        ctk.CTkEntry(self, textvariable=self.qtd_paletes).pack()
-
-        ctk.CTkLabel(self, text="Peso Veículo Vazio:").pack()
-        ctk.CTkEntry(self, textvariable=self.peso_vazio).pack()
-
-        ctk.CTkLabel(self, text="Peso Final Balança:").pack()
-        ctk.CTkEntry(self, textvariable=self.peso_balanca).pack()
-
-        ctk.CTkButton(self, text="Calcular", command=self.iniciar_processamento).pack(pady=10)
-
-        ctk.CTkLabel(self, text="Histórico de Logs:").pack(pady=5)
-        self.log_display = ctk.CTkLabel(self, text="", wraplength=600, justify="left")
-        self.log_display.pack(pady=5)
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=1)
+        formulario_frame = ctk.CTkFrame(self)
+        formulario_frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+        ctk.CTkLabel(formulario_frame, text="Placa:").pack(anchor="w")
+        ctk.CTkEntry(formulario_frame, textvariable=self.placa).pack(fill="x")
+        ctk.CTkLabel(formulario_frame, text="Turno:").pack(anchor="w")
+        ctk.CTkComboBox(formulario_frame, values=["A", "B", "C"], variable=self.turno).pack(fill="x")
+        ctk.CTkLabel(formulario_frame, text="Remessa:").pack(anchor="w")
+        ctk.CTkEntry(formulario_frame, textvariable=self.remessa).pack(fill="x")
+        ctk.CTkLabel(formulario_frame, text="Quantidade de Paletes:").pack(anchor="w")
+        ctk.CTkEntry(formulario_frame, textvariable=self.qtd_paletes).pack(fill="x")
+        ctk.CTkLabel(formulario_frame, text="Peso Veículo Vazio:").pack(anchor="w")
+        ctk.CTkEntry(formulario_frame, textvariable=self.peso_vazio).pack(fill="x")
+        ctk.CTkLabel(formulario_frame, text="Peso Final Balança:").pack(anchor="w")
+        ctk.CTkEntry(formulario_frame, textvariable=self.peso_balanca).pack(fill="x")
+        ctk.CTkButton(formulario_frame, text="Calcular", command=self.iniciar_processamento).pack(pady=10)
+        self.progress_bar = ctk.CTkProgressBar(formulario_frame, mode="determinate")
+        self.progress_bar.set(0)
+        self.progress_bar.pack(pady=10, fill="x")
+        self.progress_bar.pack_forget()
+        logs_frame = ctk.CTkFrame(self)
+        logs_frame.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
+        logs_frame.grid_rowconfigure(1, weight=1)
+        logs_frame.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(logs_frame, text="📜 Histórico de Logs:").grid(row=0, column=0, sticky="w")
+        self.log_display = ctk.CTkTextbox(logs_frame, wrap="word", width=400, height=400)
+        self.log_display.grid(row=1, column=0, sticky="nsew")
+        ctk.CTkButton(logs_frame, text="🧹 Limpar Histórico", command=self.limpar_logs).grid(row=2, column=0, pady=10, sticky="e")
 
     def add_log(self, msg):
-        print(msg)
         timestamp = datetime.now().strftime("%H:%M:%S")
         entrada = f"[{timestamp}] {msg}"
         self.log_text.append(entrada)
-        self.log_display.configure(text="\n".join(self.log_text[-10:]))
+        self.log_display.configure(state="normal")
+        self.log_display.insert("end", entrada + "\n")
+        self.log_display.see("end")
+        self.log_display.configure(state="disabled")
+
+    def limpar_logs(self):
+        self.log_text.clear()
+        self.log_geral.clear()
+        self.log_display.configure(state="normal")
+        self.log_display.delete("1.0", "end")
+        self.log_display.configure(state="disabled")
     
+
+    def log_callback_completo(self, mensagem):
+            print(mensagem)
+            self.log_geral.append(mensagem)
+            self.add_log(mensagem)
+
+    def log_callback_tecnico(self, mensagem):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        entrada = f"[{timestamp}] {mensagem}"
+        self.log_tecnico.append(entrada)
+
     def iniciar_processamento(self):
+        self.progress_bar.pack()  
+        self.progress_bar.set(0) 
+        self.add_log("Iniciando cálculo...")
         thread = threading.Thread(target=self.processar)
         thread.start()
 
     def processar(self):
+        self.progress_bar.set(0.1)
         path_base_sobrepeso = os.path.join(fonte_dir, "Base_sobrepeso_real.xlsx")
         path_base_expedicao = os.path.join(fonte_dir, "expedicao.xlsx")
         path_base_sap = os.path.join(fonte_dir, "base_sap.xlsx")
@@ -879,33 +913,38 @@ class App(ctk.CTk):
         df_fracao = pd.read_excel(path_base_frac, sheet_name="FRACAO")
         try:
             self.log_text.clear()
-            self.log_display.configure(text="")
+            self.log_display.configure(state="normal")
+            self.log_display.delete("1.0", "end")
+            self.log_display.configure(state="disabled")
+
 
             file_path = criar_copia_planilha(fonte_dir, "SIMULADOR_BALANÇA_LIMPO_2.xlsx", self.add_log)
-            log_callback_completo(self,f"Abrindo planilha Excel em: {file_path}")
+            self.log_callback_completo(f"Abrindo planilha Excel em: {file_path}")
 
             xl = pd.ExcelFile(file_path)
-            log_callback_completo(self,"Lendo abas do arquivos...")
-            df_sku = xl.parse("dado_sku")
-            log_callback_completo(self,"Abas carregadas com sucesso.")
-
+            self.log_callback_completo("Lendo abas do arquivos...")
+            with pd.ExcelFile(file_path) as xl:
+                df_sku = xl.parse("dado_sku")
+            self.log_callback_completo("Abas carregadas com sucesso.")
+            self.progress_bar.set(0.3)
             peso_vazio = float(self.peso_vazio.get())
             peso_balança = float(self.peso_balanca.get())
             qtd_paletes = int(self.qtd_paletes.get())
             remessa = int(self.remessa.get())
             df_remessa = df_expedicao[df_expedicao['REMESSA'] == remessa]
 
-            log_callback_completo(self,f"Entradas: Remessa={remessa}, Peso Vazio={peso_vazio}, Paletes={qtd_paletes}")
+            self.log_callback_completo(f"Entradas: Remessa={remessa}, Peso Vazio={peso_vazio}, Paletes={qtd_paletes}")
 
-            log_callback_completo(self,"Iniciando cálculo do peso final...")
+            self.log_callback_completo("Iniciando cálculo do peso final...")
             resultado = calcular_peso_final(
                 remessa, peso_vazio, qtd_paletes,
                 df_expedicao, df_sku, df_sap, df_sobrepeso_real,df_base_fisica, df_frac,df_estoque_sep,df_externo_peso,
-                self.add_log
+                self.log_callback_tecnico
             )
+            self.progress_bar.set(0.5)
             if resultado:
                 peso_base, sp_total, peso_com_sp, peso_final, media_sp, itens_detalhados = resultado
-
+            
                 dados = {
                     'remessa': remessa,
                     'qtd_skus': df_expedicao[df_expedicao['REMESSA'] == remessa]['ITEM'].nunique(),
@@ -920,7 +959,7 @@ class App(ctk.CTk):
                     'qtd_paletes': qtd_paletes
                 }
 
-                log_callback_completo(self,"Chamando preenchimento do formulário via COM...")
+                self.log_callback_completo("Chamando preenchimento do formulário via COM...")
                 itens_detalhados_integrados = integrar_itens_detalhados(
                     df_remessa, df_sap, df_sobrepeso_real, df_sku, df_base_fisica, self.add_log
                 )
@@ -929,11 +968,12 @@ class App(ctk.CTk):
                     file_path, dados, itens_detalhados_integrados, self.add_log,
                     df_sku, df_remessa, df_fracao
                 )
-                log_callback_completo(self,"Exportando PDF...")
+                self.progress_bar.set(0.7)
+                self.log_callback_completo("Exportando PDF...")
                 pdf_path = exportar_pdf_com_comtypes(file_path, "FORMULARIO", nome_remessa=remessa, log_callback=self.add_log)
-                log_callback_completo(self,f"PDF exportado com sucesso: {pdf_path}")
-
-                log_callback_completo(self,"Gerando relatório de divergência em PDF...")
+                self.log_callback_completo(f"PDF exportado com sucesso: {pdf_path}")
+                self.progress_bar.set(0.85)
+                self.log_callback_completo("Gerando relatório de divergência em PDF...")
                 relatorio_path = gerar_relatorio_diferenca(
                     remessa_num=remessa,
                     peso_final_balança=peso_balança,
@@ -941,32 +981,49 @@ class App(ctk.CTk):
                     df_remessa=df_expedicao[df_expedicao['REMESSA'] == remessa],
                     df_sku=df_sku,
                     peso_estimado_total=peso_com_sp,
-                    pasta_excel=fonte_dir
+                    pasta_excel=fonte_dir,
+                    log_callback=self.log_callback_completo
                 )
-                log_callback_completo(self,f"Relatório adicional salvo em: {relatorio_path}")
+                self.log_callback_completo(f"Relatório adicional salvo em: {relatorio_path}")
 
                 messagebox.showinfo(
                     "Sucesso",
                     f"Formulário exportado: {pdf_path}\n\nRelatório de divergência salvo:\n{relatorio_path}"
                 )
-                print_pdf(pdf_path)  
-                print_pdf(relatorio_path)
-
-                enviar_email_com_log_e_pdf(log_geral, pdf_path, remessa)
-
                 try:
+                    self.log_callback_completo("Iniciando impressão do relatório")
+                    print_pdf(pdf_path, log_callback=self.log_callback_completo)
+                    print_pdf(relatorio_path, log_callback=self.log_callback_completo)
+                    self.log_callback_completo("Relatório impresso com sucessos")
+                    self.progress_bar.set(0.95)
+                except:
+                    self.log_callback_completo("Impressão do Relatório com Erro")
+                try:
+                    enviar_email_com_log_e_pdf(
+                        pdf_path,
+                        remessa,
+                        log_callback=self.log_callback_completo,
+                        log_geral=self.log_tecnico
+                    )
+                    self.log_callback_completo("Envio com sucesso para o email a tratativa")
+                    self.progress_bar.set(1)
+                    self.add_log("✅ Processamento concluído com sucesso!")
+                except:
+                    self.log_callback_completo("Erro ao enviar para o email a tratativa")
+                try:
+                    time.sleep(1)
                     os.remove(file_path)
-                    log_callback_completo(self,f"Cópia temporária removida: {file_path}")
+                    self.log_callback_completo(f"Cópia temporária removida: {file_path}")
                 except Exception as e:
-                    log_callback_completo(self,f"Erro ao remover a cópia temporária: {e}")
+                    self.log_callback_completo(f"Erro ao remover a cópia temporária: {e}")
 
             else:
-                log_callback_completo(self,"Falha no cálculo. Verifique os dados inseridos.")
+                self.log_callback_completo("Falha no cálculo. Verifique os dados inseridos.")
                 messagebox.showwarning("Aviso", "Cálculo não pôde ser realizado.")
 
 
         except Exception as e:
-            log_callback_completo(self,f"Erro: {str(e)}")
+            self.log_callback_completo(f"Erro: {str(e)}")
             messagebox.showerror("Erro", f"Erro ao processar: {str(e)}")
 
 
