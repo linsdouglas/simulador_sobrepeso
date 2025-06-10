@@ -550,7 +550,7 @@ def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_f
     quantidade_com_sp_real = 0
     ponderador_pos = 0
     ponderador_neg = 0
-
+    familia_detectada = "MIX"
     agrupado_por_sku = defaultdict(list)
     for item in itens_detalhados:
         agrupado_por_sku[item['sku']].append(item)
@@ -559,15 +559,12 @@ def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_f
         qtd_total = 0
         qtd_real = 0
         ponderador_pos_local = 0
-        ponderador_neg_local = 0
-        familia_detectada = "MIX"  
-
+        ponderador_neg_local = 0 
         for item in itens:
             origem = item.get('origem', 'fixo')
             sp = item.get('sp', 0)
             chave = item.get('chave_pallet', '')
             qtd = 0
-
             if chave in df_fracao['chave_pallete'].values:
                 qtd = pd.to_numeric(df_fracao[df_fracao['chave_pallete'] == chave]['qtd'], errors='coerce').sum()
             else:
@@ -604,34 +601,29 @@ def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_f
         log_callback("Menos de 50% da quantidade com SP Real. Usando tabela de sobrepeso físico.")
         familias = set()
         for sku in agrupado_por_sku:
-            familia = df_base_familia.loc[df_base_familia['CÓD'] == sku, 'FAMILIA 2']
-            if not familia.empty:
-                familias.add(familia.values[0])
+            familia_series = df_base_familia.loc[df_base_familia['CÓD'] == sku, 'FAMILIA 2']
+            if not familia_series.empty:
+                familia_str=str(familia_series.iloc[0])
+                familias.add(familia_str)
 
         if len(familias) == 1:
-            familia = list(familias)[0]
-            if 'BISCOITO' in familia.upper():
+            familia_str = list(familias)[0]
+            if 'BISCOITO' in familia_str.upper():
+                familia_detectada = "BISCOITO"
                 row = df_sobrepeso_tabela.loc[df_sobrepeso_tabela.index.str.contains("BISCOITO", case=False)]
-            elif 'MASSA' in familia.upper():
+            elif 'MASSA' in familia_str.upper():
+                familia_detectada = 'MASSA'
                 row = df_sobrepeso_tabela.loc[df_sobrepeso_tabela.index.str.contains("MASSA", case=False)]
             else:
+                familia_detectada = "MIX"
                 row = df_sobrepeso_tabela.loc[df_sobrepeso_tabela.index.str.contains("MIX", case=False)]
         else:
+            familia_detectada = "MIX"
             row = df_sobrepeso_tabela.loc[df_sobrepeso_tabela.index.str.contains("MIX", case=False)]
 
         if row.empty:
             log_callback("Família não encontrada na tabela. Usando MIX como fallback.")
             row = df_sobrepeso_tabela.loc[df_sobrepeso_tabela.index.str.contains("MIX", case=False)]
-        
-        if 'BISCOITO' in familia.upper():
-            row = df_sobrepeso_tabela.loc[df_sobrepeso_tabela.index.str.contains("BISCOITO", case=False)]
-            familia_detectada = "BISCOITO"
-        elif 'MASSA' in familia.upper():
-            row = df_sobrepeso_tabela.loc[df_sobrepeso_tabela.index.str.contains("MASSA", case=False)]
-            familia_detectada = "MASSA"
-        else:
-            row = df_sobrepeso_tabela.loc[df_sobrepeso_tabela.index.str.contains("MIX", case=False)]
-            familia_detectada = "MIX"
 
         media_positiva = row['(+)'].values[0]
         media_negativa = row['(-)'].values[0]
@@ -660,7 +652,11 @@ def preencher_formulario_com_openpyxl(path_copia, dados, itens_detalhados, log_c
         ws["A16"] = f"Sobrepeso para (+): {sp_pos*100:.2f}%"
         ws["A18"] = f"Sobrepeso para (-): {sp_neg*100:.2f}%"
         ws["D7"] = f"{proporcao_sp_real*100:.2f}% x {(1 - proporcao_sp_real)*100:.2f}%"
-        ws["B5"] = familia_detectada
+        try:
+            ws["B5"] = str(familia_detectada) if familia_detectada is not None else "MIX"
+        except Exception as e:
+            log_callback(f"Erro ao escrever família detectada: {e}")
+            ws["B5"] = "MIX" 
         ws["B4"] = dados['remessa']
         ws["B6"] = dados['qtd_skus']
         ws["B7"] = dados['placa']
