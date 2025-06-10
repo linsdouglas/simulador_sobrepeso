@@ -833,7 +833,7 @@ ctk.set_default_color_theme("green")
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Simulador de Sobrepeso")
+        self.title("Simulador de Sobrepeso 2.0")
         self.geometry("1000x600")
 
         self.log_tecnico = []
