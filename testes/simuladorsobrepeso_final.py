@@ -864,6 +864,7 @@ class App(ctk.CTk):
         ctk.CTkLabel(formulario_frame, text="Peso Final Balança:").pack(anchor="w")
         ctk.CTkEntry(formulario_frame, textvariable=self.peso_balanca).pack(fill="x")
         ctk.CTkButton(formulario_frame, text="Calcular", command=self.iniciar_processamento).pack(pady=10)
+        ctk.CTkButton(formulario_frame, text="🔄 Refresh Bases", command=self.atualizar_bases).pack(pady=5)
         self.progress_bar = ctk.CTkProgressBar(formulario_frame, mode="determinate")
         self.progress_bar.set(0)
         self.progress_bar.pack(pady=10, fill="x")
@@ -876,6 +877,38 @@ class App(ctk.CTk):
         self.log_display = ctk.CTkTextbox(logs_frame, wrap="word", width=400, height=400)
         self.log_display.grid(row=1, column=0, sticky="nsew")
         ctk.CTkButton(logs_frame, text="🧹 Limpar Histórico", command=self.limpar_logs).grid(row=2, column=0, pady=10, sticky="e")
+
+    def atualizar_bases(self):
+        try:
+            self.add_log("⏳ Forçando atualização das bases do OneDrive...")
+            path_base_sobrepeso = os.path.join(fonte_dir, "Base_sobrepeso_real.xlsx")
+            path_base_expedicao = os.path.join(fonte_dir, "expedicao.xlsx")
+            path_base_sap = os.path.join(fonte_dir, "base_sap.xlsx")
+            path_base_frac = os.path.join(fonte_dir, "FRACAO_1.xlsx")
+            path_base_estoque = os.path.join(fonte_dir, "estoqueseparacao.xlsx")
+            path_base_peso_exter = os.path.join(fonte_dir,"receb_extern_peso.xlsx")
+
+            excel = win32.gencache.EnsureDispatch('Excel.Application')
+            excel.Visible = False
+            wb = excel.Workbooks.Open(path_base_expedicao)
+            time.sleep(5)
+            wb.Close(False)
+            excel.Quit()
+
+            mod_time = os.path.getmtime(path_base_expedicao)
+            data_mod = datetime.fromtimestamp(mod_time).strftime("%d/%m/%Y %H:%M:%S")
+
+            global df_sap, df_estoque_sep, df_externo_peso, df_frac, df_expedicao, df_sobrepeso_real
+            df_externo_peso=pd.read_excel(path_base_peso_exter, sheet_name="Sheet1")
+            df_estoque_sep = pd.read_excel(path_base_estoque)
+            df_frac=pd.read_excel(path_base_frac, sheet_name="FRACAO")
+            df_sap = pd.read_excel(path_base_sap, sheet_name="Sheet1")
+            df_expedicao = pd.read_excel(path_base_expedicao, sheet_name="dado_exp")
+            df_sobrepeso_real = pd.read_excel(path_base_sobrepeso, sheet_name="SOBREPESO")
+
+            self.add_log(f"Bases atualizadas com sucesso! Última modificação: {data_mod}")
+        except Exception as e:
+            self.add_log(f"Erro ao atualizar bases: {e}")
 
     def add_log(self, msg):
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -953,6 +986,13 @@ class App(ctk.CTk):
             self.log_callback_completo(f"Entradas: Remessa={remessa}, Peso Vazio={peso_vazio}, Paletes={qtd_paletes}")
 
             self.log_callback_completo("Iniciando cálculo do peso final...")
+            df_remessa = df_expedicao[df_expedicao['REMESSA'] == remessa]
+
+            if df_remessa.empty:
+                self.log_callback_completo(f"❌ Remessa {remessa} não encontrada na base de expedição.")
+                messagebox.showwarning("Remessa não encontrada", f"A remessa {remessa} não foi localizada na base de expedição.\nVerifique se os dados estão corretos ou se a base foi atualizada.")
+                return
+
             resultado = calcular_peso_final(
                 remessa, peso_vazio, qtd_paletes,
                 df_expedicao, df_sku, df_sap, df_sobrepeso_real,df_base_fisica, df_frac,df_estoque_sep,df_externo_peso,
