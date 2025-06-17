@@ -891,7 +891,8 @@ class App(ctk.CTk):
             excel = win32.gencache.EnsureDispatch('Excel.Application')
             excel.Visible = False
             wb = excel.Workbooks.Open(path_base_expedicao)
-            time.sleep(5)
+            self.add_log("Atualizando base da expedição, Aguarde...")
+            time.sleep(30)
             wb.Close(False)
             excel.Quit()
 
