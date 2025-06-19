@@ -543,7 +543,7 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
     log_callback(f"└── fixos: {sum(1 for i in itens_detalhados if i.get('origem') == 'fixo')}")
 
 
-    return peso_base_total, sp_total, peso_com_sobrepeso, peso_total_com_paletes, media_sp_geral, itens_detalhados_integrados
+    return peso_base_total, sp_total, peso_com_sobrepeso, peso_total_com_paletes, media_sp_geral, itens_detalhados
 
 def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_familia, df_sobrepeso_tabela, df_sku, df_remessa, df_fracao, log_callback):
     total_quantidade = 0
@@ -1018,12 +1018,9 @@ class App(ctk.CTk):
                 }
 
                 self.log_callback_completo("Chamando preenchimento do formulário via COM...")
-                itens_detalhados_integrados = integrar_itens_detalhados(
-                    df_remessa, df_sap, df_sobrepeso_real, df_sku, df_base_fisica, self.add_log
-                )
 
                 preencher_formulario_com_openpyxl(
-                    file_path, dados, itens_detalhados_integrados, self.add_log,
+                    file_path, dados, itens_detalhados, self.add_log,
                     df_sku, df_remessa, df_fracao
                 )
                 self.progress_bar.set(0.7)
