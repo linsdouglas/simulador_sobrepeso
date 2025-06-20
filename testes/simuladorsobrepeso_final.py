@@ -18,7 +18,7 @@ import os
 import threading
 import glob
 import subprocess
-from collections import defaultdict
+from collections import defaultdict, Counter
 import yagmail
 import time
 import gc
@@ -96,66 +96,6 @@ def print_pdf(file_path, impressora="VITLOG01A01", sumatra_path="C:\\Program Fil
             log_callback(f"Output: {e.output}")
             log_callback(f"Stderr: {e.stderr}")
 
-def integrar_itens_detalhados(df_remessa, df_sap, df_sobrepeso_real, df_sku, df_base_fisica, log_callback):
-    itens_detalhados = []
-
-    for _, row in df_remessa.iterrows():
-        sku = row['ITEM']
-        chave_pallet = row.get('CHAVE_PALETE', None)
-        qtd = pd.to_numeric(row.get('QUANTIDADE', 0), errors='coerce')
-        sp = 0.0
-        origem = 'fixo'
-        ajuste_sp = 0.0
-
-        peso_base_liq = 0
-        peso_caixa_liq = pd.to_numeric(
-            df_sku[df_sku['COD_PRODUTO'] == sku].iloc[0]['QTDE_PESO_LIQ'],
-            errors='coerce'
-        ) if not df_sku[df_sku['COD_PRODUTO'] == sku].empty else 0
-
-        if pd.notna(qtd) and pd.notna(peso_caixa_liq):
-            peso_base_liq = float(qtd) * float(peso_caixa_liq)
-
-        if pd.notna(chave_pallet) and chave_pallet in df_sap['Chave Pallet'].values:
-            try:
-                lote_info = df_sap[df_sap['Chave Pallet'] == chave_pallet].iloc[0]
-                lote = lote_info['Lote']
-                data_producao = lote_info['Data de produção']
-                hora_inicio = f"{lote_info['Hora de criação'].hour:02d}:00:00"
-                hora_fim = f"{lote_info['Hora de modificação'].hour:02d}:00:00"
-                linha_coluna = "L" + lote[-3:] if isinstance(lote, str) and len(lote) >= 2 else "LB00"
-                if linha_coluna in ['LB06', 'LB07']:
-                    linha_coluna = 'LB06/07'
-                log_callback(f"Linha produzida ajustada: {linha_coluna}")
-
-                df_sp_filtro = df_sobrepeso_real[
-                    (df_sobrepeso_real['DataHora'] >= pd.to_datetime(f"{data_producao} {hora_inicio}")) &
-                    (df_sobrepeso_real['DataHora'] <= pd.to_datetime(f"{data_producao} {hora_fim}"))
-                ]
-
-                if linha_coluna in df_sp_filtro.columns:
-                    sp_valores = df_sp_filtro[linha_coluna].fillna(0)
-                    if not sp_valores.empty:
-                        media_sp = sp_valores.mean() / 100
-                        sp = media_sp
-                        origem = 'real'
-                        ajuste_sp = peso_base_liq * sp
-
-            except Exception as e:
-                log_callback(f"Erro ao calcular SP real para pallet {chave_pallet}: {e}")
-
-        if origem == 'fixo':
-            sp, ajuste_sp = calculo_sobrepeso_fixo(sku, df_base_fisica, peso_base_liq, log_callback)
-
-        itens_detalhados.append({
-            'sku': sku,
-            'chave_pallet': chave_pallet if pd.notna(chave_pallet) else 'N/A',
-            'sp': round(sp, 4),
-            'ajuste_sp': round(ajuste_sp, 2),
-            'origem': origem
-        })
-    log_callback(f"Total de itens detalhados integrados: {len(itens_detalhados)} de {len(df_remessa)} linhas da remessa.")
-    return itens_detalhados
 
 
 def calculo_sobrepeso_fixo(sku, df_base_fisica, peso_base_liq, log_callback):
@@ -379,7 +319,6 @@ def calcular_peso_receb_externo(chave, sku, row, df_externo_peso, df_estoque_sep
 
 def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedicao, df_sku, df_sap, df_sobrepeso_real,
                          df_base_fisica, df_frac, df_estoque_sep, df_externo_peso,log_callback):
-    from collections import defaultdict
     try:
         remessa_num = int(remessa_num)
     except ValueError:
@@ -390,7 +329,9 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
     if df_remessa.empty:
         log_callback("Remessa não encontrada em data_exp.")
         return None
-
+    colunas_checagem = ['DOCA', 'PALETE', 'QUANTIDADE', 'DATA', 'VIDA_UTIL_EM_DIAS', 'ITEM', 'CHAVE_PALETE']
+    df_remessa = df_remessa.drop_duplicates(subset=colunas_checagem)
+    log_callback(f"Linhas duplicadas removidas com base em {colunas_checagem}. Total de linhas após limpeza: {len(df_remessa)}")
     contador_exp = defaultdict(int)
     for _, row in df_remessa.iterrows():
         key = (row['ITEM'], row['QUANTIDADE'])
@@ -400,7 +341,7 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
     peso_base_total_liq = 0
     sp_total = 0
     itens_detalhados = []
-    chaves_pallet_processadas = set()
+    chaves_pallet_processadas = []
 
     df_expedicao_sem_pallet = df_remessa[df_remessa['CHAVE_PALETE'].isna()]
     pacotes_expedicao = df_expedicao_sem_pallet.groupby(['ITEM', 'QUANTIDADE']).size().reset_index(name='count')
@@ -431,9 +372,9 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
                 endereco = frac_row.get('endereco')
                 chave_frac = buscar_chave_por_endereco(endereco, df_estoque_sep)
 
-            if chave_frac in chaves_pallet_processadas or pd.isna(chave_frac):
+            if pd.isna(chave_frac):
                 continue
-            chaves_pallet_processadas.add(chave_frac)
+            chaves_pallet_processadas.append(chave_frac)
             resultado_ext = calcular_peso_receb_externo(
             chave_frac, sku, frac_row, df_externo_peso, df_estoque_sep,df_sku,
             peso_base_total, peso_base_total_liq, itens_detalhados, log_callback
@@ -480,14 +421,17 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
                 itens_detalhados, log_callback
             )
 
-    df_expedicao_com_pallet = df_remessa[df_remessa['CHAVE_PALETE'].notna()]
+    df_expedicao_com_pallet = df_remessa[
+        (df_remessa['CHAVE_PALETE'].notna()) &
+        (~df_remessa['CHAVE_PALETE'].isin(chaves_pallet_processadas))
+    ]
     for _, row in df_expedicao_com_pallet.iterrows():
         sku = row['ITEM']
         chave_pallet = row['CHAVE_PALETE']
         qtd_caixas = pd.to_numeric(row['QUANTIDADE'], errors='coerce')
-        if chave_pallet in chaves_pallet_processadas or pd.isna(qtd_caixas):
+        if pd.isna(qtd_caixas):
             continue
-        chaves_pallet_processadas.add(chave_pallet)
+        chaves_pallet_processadas.append(chave_pallet)
         resultado_ext = calcular_peso_receb_externo(
             chave_pallet, sku, row, df_externo_peso, df_estoque_sep,df_sku,
             peso_base_total, peso_base_total_liq, itens_detalhados, log_callback
@@ -524,23 +468,26 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
     log_callback(f"Peso com sobrepeso: {peso_com_sobrepeso:.2f} kg")
 
     peso_total_com_paletes = peso_com_sobrepeso + (qtd_paletes * 22) + peso_veiculo_vazio
-    log_callback(f"Peso total com paletes ({qtd_paletes} x 26kg): {peso_total_com_paletes:.2f} kg")
+    log_callback(f"Peso total com paletes ({qtd_paletes} x 22kg): {peso_total_com_paletes:.2f} kg")
 
-    itens_detalhados_integrados = integrar_itens_detalhados(
-        df_remessa, df_sap, df_sobrepeso_real, df_sku, df_base_fisica, log_callback
-    )
 
-    media_sp_geral = (sum(item['sp'] for item in itens_detalhados_integrados) / len(itens_detalhados_integrados)) if itens_detalhados_integrados else 0.0
-    log_callback(f"Média geral de sobrepeso (entre {len(itens_detalhados_integrados)} itens): {media_sp_geral:.4f}")
+    media_sp_geral = (sum(item['sp'] for item in itens_detalhados) / len(itens_detalhados)) if itens_detalhados else 0.0
+    log_callback(f"Média geral de sobrepeso (entre {len(itens_detalhados)} itens): {media_sp_geral:.4f}")
 
-    qtd_real = sum(1 for i in itens_detalhados_integrados if i['origem'] == 'real')
-    qtd_ext  = sum(1 for i in itens_detalhados_integrados if i['origem'] == 'receb_ext')
-    qtd_fixo = sum(1 for i in itens_detalhados_integrados if i['origem'] == 'fixo')
+    qtd_real = sum(1 for i in itens_detalhados if i['origem'] == 'real')
+    qtd_ext  = sum(1 for i in itens_detalhados if i['origem'] == 'receb_ext')
+    qtd_fixo = sum(1 for i in itens_detalhados if i['origem'] == 'fixo')
 
     log_callback(f"📦 Total de itens processados: {len(itens_detalhados)}")
     log_callback(f"├── reais: {sum(1 for i in itens_detalhados if i.get('origem') in ['real', 'receb_ext'])}")
     log_callback(f"├── receb_ext: {sum(1 for i in itens_detalhados if i.get('origem') == 'receb_ext')}")
     log_callback(f"└── fixos: {sum(1 for i in itens_detalhados if i.get('origem') == 'fixo')}")
+
+    repetidas = [chave for chave, count in Counter(chaves_pallet_processadas).items() if count > 1]
+    if repetidas:
+        log_callback(f"⚠️ Foram encontradas chaves pallet repetidas: {', '.join(repetidas)}")
+        messagebox.showwarning("Chaves Repetidas, por favor ALERTE ao Responsável pela Conferência da Remessa",
+                                f"Foram encontradas {len(repetidas)} chaves_pallet repetidas no processo:\n\n" + "\n".join(repetidas))
 
 
     return peso_base_total, sp_total, peso_com_sobrepeso, peso_total_com_paletes, media_sp_geral, itens_detalhados
