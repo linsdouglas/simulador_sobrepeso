@@ -330,8 +330,16 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_expedic
         log_callback("Remessa não encontrada em data_exp.")
         return None
     colunas_checagem = ['DOCA', 'PALETE', 'QUANTIDADE', 'DATA', 'VIDA_UTIL_EM_DIAS', 'ITEM', 'CHAVE_PALETE']
-    df_remessa = df_remessa.drop_duplicates(subset=colunas_checagem)
-    log_callback(f"Linhas duplicadas removidas com base em {colunas_checagem}. Total de linhas após limpeza: {len(df_remessa)}")
+    df_com_chave = df_remessa[df_remessa['CHAVE_PALETE'].notna()]
+    df_sem_chave = df_remessa[df_remessa['CHAVE_PALETE'].isna()]
+    total_antes = len(df_remessa)
+    com_chave_antes = len(df_com_chave)
+    df_com_chave = df_com_chave.drop_duplicates(subset=colunas_checagem)
+    com_chave_depois = len(df_com_chave)
+    total_depois = com_chave_depois + len(df_sem_chave)
+    df_remessa = pd.concat([df_com_chave, df_sem_chave], ignore_index=True)
+    log_callback(f"Removidas duplicatas com CHAVE_PALETE: {com_chave_antes - com_chave_depois} removidas de {com_chave_antes} registros com chave.")
+    log_callback(f"Total de linhas antes: {total_antes} → depois da limpeza: {total_depois}")
     contador_exp = defaultdict(int)
     for _, row in df_remessa.iterrows():
         key = (row['ITEM'], row['QUANTIDADE'])
