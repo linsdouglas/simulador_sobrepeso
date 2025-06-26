@@ -912,7 +912,9 @@ class App(ctk.CTk):
         df_estoque_sep = pd.read_excel(path_base_estoque)
         df_frac=pd.read_excel(path_base_frac, sheet_name="FRACAO")
         df_sap = pd.read_excel(path_base_sap, sheet_name="Sheet1")
-        df_expedicao = pd.read_excel(path_base_expedicao, sheet_name="dado_exp")
+        df_expedicao = pd.read_excel(path_base_expedicao, sheet_name="dado_exp", 
+                                dtype={'REMESSA': str}) 
+        df_expedicao['REMESSA'] = pd.to_numeric(df_expedicao['REMESSA'], errors='coerce') 
         df_sobrepeso_real = pd.read_excel(path_base_sobrepeso, sheet_name="SOBREPESO")
         df_sobrepeso_real['DataHora'] = pd.to_datetime(df_sobrepeso_real['DataHora'])
         df_base_fisica = pd.read_excel(caminho_base_fisica, sheet_name="BASE FISICA")
@@ -942,11 +944,26 @@ class App(ctk.CTk):
             self.log_callback_completo(f"Entradas: Remessa={remessa}, Peso Vazio={peso_vazio}, Paletes={qtd_paletes}")
 
             self.log_callback_completo("Iniciando cálculo do peso final...")
-            df_remessa = df_expedicao[df_expedicao['REMESSA'] == remessa]
+            self.log_callback_completo(f"Tipo da remessa inserida: {type(remessa)}, Valor: {remessa}")
+            self.log_callback_completo(f"Tipo da coluna REMESSA: {df_expedicao['REMESSA'].dtype}")
+            self.log_callback_completo(f"Valores únicos de REMESSA: {df_expedicao['REMESSA'].dropna().unique()[:2]}")
+            try:
+                df_expedicao['REMESSA'] = pd.to_numeric(df_expedicao['REMESSA'])
+                remessa_num = int(remessa)
+            except Exception as e:
+                self.log_callback_completo(f"Erro na conversão: {e}")
+                messagebox.showerror("Erro", f"Formato inválido da remessa: {remessa}")
+                return
+
+            df_remessa = df_expedicao[df_expedicao['REMESSA'] == remessa_num]
 
             if df_remessa.empty:
-                self.log_callback_completo(f"❌ Remessa {remessa} não encontrada na base de expedição.")
-                messagebox.showwarning("Remessa não encontrada", f"A remessa {remessa} não foi localizada na base de expedição.\nVerifique se os dados estão corretos ou se a base foi atualizada.")
+                disponiveis = sorted(df_expedicao['REMESSA'].dropna().unique().tolist())
+                self.log_callback_completo(f"❌ Remessa {remessa_num} não encontrada. Remessas disponíveis: {disponiveis}")
+                messagebox.showwarning("Remessa não encontrada", 
+                                    f"A remessa {remessa_num} não foi localizada na base.\n"
+                                    f"Remessas disponíveis: {disponiveis[-10:]}\n"
+                                    f"Verifique se digitou corretamente.")
                 return
 
             resultado = calcular_peso_final(
