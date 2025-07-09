@@ -73,6 +73,15 @@ def abrir_workbook(excel, path, log_callback, tentativas=3, espera=2):
 def executar_processo(mapa_frete_path, mes_usuario, log_callback):
     try:
         log_callback("Iniciando processo direto nos arquivos originais...")
+        try:
+            import shutil
+            import win32com.client.gencache
+            win32com.client.gencache.is_readonly = False
+            shutil.rmtree(win32com.client.gencache.GetGeneratePath(), ignore_errors=True)
+        except Exception as e:
+            log_callback(f"Aviso: erro ao limpar cache COM: {e}")
+
+        excel = win32.gencache.EnsureDispatch('Excel.Application')
 
         excel = win32.gencache.EnsureDispatch('Excel.Application')
         excel.Visible = False
