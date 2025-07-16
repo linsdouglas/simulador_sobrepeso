@@ -12,7 +12,6 @@ win32com.client.gencache.EnsureDispatch("Excel.Application")
 
 
 print("Script iniciado.")
-
 dados_raw = r"C:\Users\xql80316\Downloads\SOBREPESOPOR HORA2.xlsx"
 
 def encontrar_pasta_onedrive_empresa():
