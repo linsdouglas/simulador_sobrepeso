@@ -49,24 +49,30 @@ df_base_familia = pd.read_excel(caminho_base_fisica, 'BASE_FAMILIA')
 def salvar_em_base_auxiliar(df_remessa, remessa, log_callback):
     caminho_aux = os.path.join(fonte_dir, "expedicao_edicoes.xlsx")
     try:
+        # Se o arquivo não existe, criar um novo
         if not os.path.exists(caminho_aux):
             with pd.ExcelWriter(caminho_aux, engine='openpyxl') as writer:
                 df_remessa.to_excel(writer, sheet_name="dado_exp", index=False)
             log_callback(f"Arquivo auxiliar criado em {caminho_aux}")
             return
+
+        # Carregar o arquivo existente
         with pd.ExcelFile(caminho_aux) as xls:
-            sheets = xls.sheet_names
+            if "dado_exp" in xls.sheet_names:
+                df_existente = pd.read_excel(xls, sheet_name="dado_exp")
+                # Remover TODAS as linhas da remessa atual
+                df_existente = df_existente[df_existente['REMESSA'].astype(str) != str(remessa)]
+            else:
+                df_existente = pd.DataFrame()
+
+        # Adicionar a nova versão completa da remessa
+        df_atualizado = pd.concat([df_existente, df_remessa], ignore_index=True)
         
-        if "dado_exp" in sheets:
-            df_existente = pd.read_excel(caminho_aux, sheet_name="dado_exp")
-            df_existente = df_existente[df_existente['REMESSA'].astype(str) != str(remessa)]
-            df_atualizado = pd.concat([df_existente, df_remessa], ignore_index=True)
-        else:
-            df_atualizado = df_remessa
+        # Salvar de volta
         with pd.ExcelWriter(caminho_aux, engine='openpyxl') as writer:
             df_atualizado.to_excel(writer, sheet_name="dado_exp", index=False)
         
-        log_callback(f"Remessa {remessa} salva na base auxiliar com sucesso!")
+        log_callback(f"Remessa {remessa} completamente atualizada na base auxiliar!")
 
     except Exception as e:
         log_callback(f"[ERRO ao salvar em base auxiliar]: {e}")
@@ -888,22 +894,61 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
         self.sku_totals_label = ctk.CTkLabel(self.sku_totals_frame, text="Totais por SKU: ")
         self.sku_totals_label.pack(side="left")
         ctk.CTkButton(bottom_frame, text="💾 Salvar Alterações", command=self.salvar_alteracoes).pack(side="right", padx=10)
-        self.label_status = ctk.CTkLabel(self, text="", text_color="green")
+        self.label_status = ctk.CTkLabel(
+            self, 
+            text="",
+            text_color="green",
+            font=("Arial", 12, "bold"),
+            corner_radius=5,
+            padx=10,
+            pady=5
+        )
         self.label_status.pack(pady=5)
-
+    
+    def format_number(self, num):
+        if pd.isna(num):
+            return "N/A"
+        try:
+            num_float = float(num)
+            if num_float.is_integer():
+                return str(int(num_float))
+            return str(num_float)
+        except:
+            return str(num)
+        
     def update_sku_totals(self):
         for widget in self.sku_totals_frame.winfo_children():
             if widget != self.sku_totals_label:
                 widget.destroy()
-    
+        
         self.sku_totals = {}
-        for entry_qtd, entry_chave in self.entry_widgets:
+        for entry_qtd, _ in self.entry_widgets:
             sku = entry_qtd.sku_associado
             qtd = float(entry_qtd.get()) if entry_qtd.get() else 0
             self.sku_totals[sku] = self.sku_totals.get(sku, 0) + qtd
-        for sku, total in self.sku_totals.items():
-            label = ctk.CTkLabel(self.sku_totals_frame, text=f"{sku}: {total}")
-            label.pack(side="left", padx=5)
+        sorted_skus = sorted(self.sku_totals.items(), key=lambda x: str(x[0]))
+        for sku, total in sorted_skus:
+            item_frame = ctk.CTkFrame(self.sku_totals_frame, fg_color="transparent")
+            item_frame.pack(side="left", padx=3)
+            sku_str = self.format_number(sku)
+            total_str = self.format_number(total)
+            sku_text = sku_str if not pd.isna(sku) else "N/A"
+            sku_label = ctk.CTkLabel(
+                item_frame, 
+                text=sku_text,
+                text_color="#FF5555", 
+                font=("Arial", 10, "bold")
+            )
+            sku_label.pack(side="left")
+            ctk.CTkLabel(item_frame, text=" = ", fg_color="transparent").pack(side="left")
+
+            qtd_label = ctk.CTkLabel(
+                item_frame, 
+                text=total_str,
+                text_color="#55FF55",  
+                font=("Arial", 10, "bold")
+            )
+            qtd_label.pack(side="left")
 
     def update_totals(self, event=None):
         total_itens = len(self.entry_widgets)
@@ -918,16 +963,24 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
         if not remessa:
             self.log_callback("Digite uma remessa válida.")
             return
-
-        df_filtrado = self.df_expedicao[self.df_expedicao['REMESSA'].astype(str) == remessa]
+        df_filtrado = self.df_expedicao[self.df_expedicao['REMESSA'].astype(str) == remessa].copy()
 
         if df_filtrado.empty:
             self.log_callback("Nenhuma remessa encontrada.")
             return
-
-        self.dados_remessa = df_filtrado[['ITEM', 'QUANTIDADE', 'CHAVE_PALETE']].copy()
+        colunas_unicas = ['ITEM', 'QUANTIDADE', 'CHAVE_PALETE']
+        df_sem_duplicatas = df_filtrado.drop_duplicates(subset=colunas_unicas)
+        
+        if len(df_filtrado) != len(df_sem_duplicatas):
+            duplicatas = len(df_filtrado) - len(df_sem_duplicatas)
+            self.log_callback(f"Removidas {duplicatas} linhas duplicadas automaticamente.")
+            self.label_status.configure(
+                text=f"Removidas {duplicatas} linhas duplicadas automaticamente!",
+                text_color="orange"
+            )
+        self.dados_remessa = df_sem_duplicatas.copy()
         self.dados_remessa.reset_index(drop=True, inplace=True)
-        self.renderizar_tabela(self.dados_remessa)
+        self.renderizar_tabela(self.dados_remessa[['ITEM', 'QUANTIDADE', 'CHAVE_PALETE']].copy())
 
     def filtrar_dados(self):
         filtro_chave = self.filtro_chave.get().strip().lower()
@@ -946,8 +999,6 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
     def renderizar_tabela(self, dados):
         for widget in self.tabela_frame.winfo_children():
             widget.destroy()
-
-        # Cabeçalhos
         headers = ["SKU", "Quantidade", "Chave Pallet", "Ações"]
         for col, header in enumerate(headers):
             ctk.CTkLabel(self.tabela_frame, text=header, font=("Arial", 12, "bold")).grid(row=0, column=col, padx=10, pady=5)
@@ -955,23 +1006,16 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
         self.entry_widgets = []
 
         for i, row in dados.iterrows():
-            # SKU
             sku = str(row['ITEM'])
             ctk.CTkLabel(self.tabela_frame, text=sku).grid(row=i + 1, column=0, padx=10)
-
-            # Quantidade
             entry_qtd = ctk.CTkEntry(self.tabela_frame)
             entry_qtd.insert(0, str(row['QUANTIDADE']))
             entry_qtd.grid(row=i + 1, column=1, padx=10)
-            entry_qtd.sku_associado = sku  # Armazena o SKU associado
+            entry_qtd.sku_associado = sku  
             entry_qtd.bind("<KeyRelease>", self.update_totals)
-
-            # Chave Pallet
             entry_chave = ctk.CTkEntry(self.tabela_frame)
             entry_chave.insert(0, str(row['CHAVE_PALETE']) if pd.notna(row['CHAVE_PALETE']) else "")
             entry_chave.grid(row=i + 1, column=2, padx=10)
-
-            # Botão Excluir
             botao_excluir = ctk.CTkButton(
                 self.tabela_frame, 
                 text="🗑", 
@@ -986,42 +1030,40 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
 
     def remover_linha(self, index):
         if 0 <= index < len(self.dados_remessa):
-            self.dados_remessa = self.dados_remessa.drop(self.dados_remessa.index[index]).reset_index(drop=True)
-            self.renderizar_tabela(self.dados_remessa)
+            self.dados_remessa = self.dados_remessa.drop(index).reset_index(drop=True)
+            self.renderizar_tabela(self.dados_remessa[['ITEM', 'QUANTIDADE', 'CHAVE_PALETE']])
             self.label_status.configure(text="Linha removida com sucesso!", text_color="green")
+            self.log_callback(f"Linha {index} removida da remessa {self.remessa_var.get()}")
 
     def salvar_alteracoes(self):
         try:
-            nova_lista = []
-            for idx, (entry_qtd, entry_chave) in enumerate(self.entry_widgets):
-                item = self.dados_remessa.iloc[idx]["ITEM"]
-                qtd_str = entry_qtd.get()
-                chave = entry_chave.get()
-                
-                nova_lista.append({
-                    "ITEM": item,
-                    "QUANTIDADE": float(qtd_str) if qtd_str else 0,
-                    "CHAVE_PALETE": chave if chave else None,
-                    "REMESSA": self.remessa_var.get()
-                })
-
-            nova_df = pd.DataFrame(nova_lista)
             remessa = self.remessa_var.get()
+            if not remessa:
+                self.log_callback("Nenhuma remessa selecionada para salvar")
+                return
+            df_completo = self.dados_remessa.copy()
             
-            salvar_em_base_auxiliar(nova_df, remessa, self.log_callback)
+            for idx, (entry_qtd, entry_chave) in enumerate(self.entry_widgets):
+                if idx < len(df_completo):  
+                    df_completo.at[idx, 'QUANTIDADE'] = float(entry_qtd.get()) if entry_qtd.get() else 0
+                    chave = entry_chave.get()
+                    df_completo.at[idx, 'CHAVE_PALETE'] = chave if chave else None
+            df_completo['REMESSA'] = remessa
+        
+            salvar_em_base_auxiliar(df_completo, remessa, self.log_callback)
             
             self.label_status.configure(
-                text="Alterações salvas com sucesso na base auxiliar!",
+                text="Alterações salvas com sucesso! (Linhas removidas incluídas)",
                 text_color="green"
             )
-            self.log_callback(f"Alterações da remessa {remessa} salvas na base auxiliar.")
+            self.log_callback(f"Alterações da remessa {remessa} salvas, incluindo linhas removidas.")
             
         except Exception as e:
             self.label_status.configure(
                 text=f"Erro ao salvar alterações: {str(e)}",
                 text_color="red"
             )
-            self.log_callback(f"[ERRO ao salvar alterações]: {traceback.format_exc()}")
+            self.log_callback(f"[ERRO] Ao salvar alterações: {traceback.format_exc()}")
 
 class App(ctk.CTk):
     def __init__(self):
