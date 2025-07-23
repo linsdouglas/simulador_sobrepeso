@@ -49,26 +49,19 @@ df_base_familia = pd.read_excel(caminho_base_fisica, 'BASE_FAMILIA')
 def salvar_em_base_auxiliar(df_remessa, remessa, log_callback):
     caminho_aux = os.path.join(fonte_dir, "expedicao_edicoes.xlsx")
     try:
-        # Se o arquivo não existe, criar um novo
         if not os.path.exists(caminho_aux):
             with pd.ExcelWriter(caminho_aux, engine='openpyxl') as writer:
                 df_remessa.to_excel(writer, sheet_name="dado_exp", index=False)
             log_callback(f"Arquivo auxiliar criado em {caminho_aux}")
             return
-
-        # Carregar o arquivo existente
         with pd.ExcelFile(caminho_aux) as xls:
             if "dado_exp" in xls.sheet_names:
                 df_existente = pd.read_excel(xls, sheet_name="dado_exp")
-                # Remover TODAS as linhas da remessa atual
                 df_existente = df_existente[df_existente['REMESSA'].astype(str) != str(remessa)]
             else:
                 df_existente = pd.DataFrame()
-
-        # Adicionar a nova versão completa da remessa
         df_atualizado = pd.concat([df_existente, df_remessa], ignore_index=True)
         
-        # Salvar de volta
         with pd.ExcelWriter(caminho_aux, engine='openpyxl') as writer:
             df_atualizado.to_excel(writer, sheet_name="dado_exp", index=False)
         
@@ -1126,8 +1119,8 @@ class App(ctk.CTk):
         ctk.CTkButton(logs_frame, text="🧹 Limpar Histórico", command=self.limpar_logs).pack(anchor="e", pady=10)
         self.edicao_frame = EdicaoRemessaFrame(
             master=self.tab_edicao,
-            df_expedicao=self.df_expedicao,   # variável que representa seu dataframe original
-            log_callback=self.add_log,        # ou self.log_mensagem, conforme definido
+            df_expedicao=self.df_expedicao,   
+            log_callback=self.add_log,       
             app=self
         )
         self.edicao_frame.pack(fill="both", expand=True, padx=10, pady=10)
