@@ -1058,49 +1058,86 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
         self.renderizar_tabela(self.dados_remessa[['ITEM', 'QUANTIDADE', 'CHAVE_PALETE']].copy())
 
     def filtrar_dados(self):
+        """Filtra os dados sem perder as alterações."""
+        self.salvar_alteracoes_antes_filtro()
         filtro_chave = self.filtro_chave.get().strip().lower()
         filtro_sku = self.filtro_sku.get().strip().lower()
         
         df_filtrado = self.dados_remessa.copy()
         
         if filtro_chave:
-            df_filtrado = df_filtrado[df_filtrado['CHAVE_PALETE'].fillna('').astype(str).str.lower().str.contains(filtro_chave)]
+            df_filtrado = df_filtrado[
+                df_filtrado['CHAVE_PALETE'].fillna('').astype(str).str.lower().str.contains(filtro_chave)
+            ]
         
         if filtro_sku:
-            df_filtrado = df_filtrado[df_filtrado['ITEM'].astype(str).str.lower().str.contains(filtro_sku)]
-        
+            df_filtrado = df_filtrado[
+                df_filtrado['ITEM'].astype(str).str.lower().str.contains(filtro_sku)
+            ]
         self.renderizar_tabela(df_filtrado)
 
-    def renderizar_tabela(self, dados):
+    def salvar_alteracoes_antes_filtro(self):
+        if not hasattr(self, 'entry_widgets') or not self.entry_widgets:
+            return
+        
+        try:
+            for entry_qtd, entry_chave in self.entry_widgets:
+                original_idx = entry_qtd.original_idx
+                nova_qtd = entry_qtd.get()
+                if nova_qtd:
+                    self.dados_remessa.at[original_idx, 'QUANTIDADE'] = float(nova_qtd)
+                nova_chave = entry_chave.get()
+                self.dados_remessa.at[original_idx, 'CHAVE_PALETE'] = nova_chave if nova_chave else None
+            
+            self.log_callback("Alterações salvas no DataFrame original.")
+        except Exception as e:
+            self.log_callback(f"Erro ao salvar alterações: {e}")
+
+    def renderizar_tabela(self, df_filtrado=None):
+        self.salvar_alteracoes_antes_filtro()
+        if df_filtrado is None:
+            df_filtrado = self.dados_remessa.copy()
         for widget in self.tabela_frame.winfo_children():
             widget.destroy()
+    
         headers = ["SKU", "Quantidade", "Chave Pallet", "Ações"]
         for col, header in enumerate(headers):
-            ctk.CTkLabel(self.tabela_frame, text=header, font=("Arial", 12, "bold")).grid(row=0, column=col, padx=10, pady=5)
-
-        self.entry_widgets = []
-
-        for i, row in dados.iterrows():
-            sku = str(row['ITEM'])
-            ctk.CTkLabel(self.tabela_frame, text=sku).grid(row=i + 1, column=0, padx=10)
-            entry_qtd = ctk.CTkEntry(self.tabela_frame)
-            entry_qtd.insert(0, str(row['QUANTIDADE']))
-            entry_qtd.grid(row=i + 1, column=1, padx=10)
-            entry_qtd.sku_associado = sku  
-            entry_qtd.bind("<KeyRelease>", self.update_totals)
-            entry_chave = ctk.CTkEntry(self.tabela_frame)
-            entry_chave.insert(0, str(row['CHAVE_PALETE']) if pd.notna(row['CHAVE_PALETE']) else "")
-            entry_chave.grid(row=i + 1, column=2, padx=10)
-            botao_excluir = ctk.CTkButton(
-                self.tabela_frame, 
-                text="🗑", 
-                width=30,
-                command=lambda idx=i: self.remover_linha(idx)
+            ctk.CTkLabel(self.tabela_frame, text=header, font=("Arial", 12, "bold")).grid(
+                row=0, column=col, padx=10, pady=5
             )
-            botao_excluir.grid(row=i + 1, column=3, padx=5)
-
+        self.entry_widgets = []
+        for idx, row in df_filtrado.iterrows():
+            original_idx = row.name if hasattr(row, 'name') else idx
+            
+            sku = str(row['ITEM'])
+            qtd = str(row['QUANTIDADE'])
+            chave = str(row['CHAVE_PALETE']) if pd.notna(row['CHAVE_PALETE']) else ""
+            ctk.CTkLabel(self.tabela_frame, text=sku).grid(
+                row=idx + 1, column=0, padx=10
+            )
+            
+            entry_qtd = ctk.CTkEntry(self.tabela_frame)
+            entry_qtd.insert(0, qtd)
+            entry_qtd.grid(row=idx + 1, column=1, padx=10)
+            entry_qtd.sku_associado = sku
+            entry_qtd.original_idx = original_idx 
+            entry_qtd.bind("<KeyRelease>", self.update_totals)
+            
+            entry_chave = ctk.CTkEntry(self.tabela_frame)
+            entry_chave.insert(0, chave)
+            entry_chave.grid(row=idx + 1, column=2, padx=10)
+            entry_chave.original_idx = original_idx  
+            
+            botao_excluir = ctk.CTkButton(
+                self.tabela_frame,
+                text="🗑",
+                width=30,
+                command=lambda idx=original_idx: self.remover_linha(idx)  
+            )
+            botao_excluir.grid(row=idx + 1, column=3, padx=5)
+        
             self.entry_widgets.append((entry_qtd, entry_chave))
-
+    
         self.update_totals()
 
     def remover_linha(self, index):
