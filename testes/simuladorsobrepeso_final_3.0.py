@@ -960,7 +960,7 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
         self.filtro_sku_totais = StringVar()
         self.entry_filtro_sku_totais = ctk.CTkEntry(self.sku_totals_lateral, textvariable=self.filtro_sku_totais, placeholder_text="Filtrar SKU")
         self.entry_filtro_sku_totais.pack(fill="x", padx=5, pady=(0, 5))
-        self.entry_filtro_sku_totais.bind("<KeyRelease>", lambda e: self.atualizar_totais_sku(filtro=self.filtro_sku_totais.get()))
+        self.entry_filtro_sku_totais.bind("<KeyRelease>", lambda e: self.atualizar_totais_sku(self.filtro_sku_totais.get()))
         self.sku_totals_scroll = ctk.CTkScrollableFrame(self.sku_totals_lateral, height=350)
         self.sku_totals_scroll.pack(fill="both", expand=True)
 
@@ -975,55 +975,72 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
         except:
             return str(num)
         
-    def update_sku_totals(self):
-            for widget in self.sku_totals_scroll.winfo_children():
-                widget.destroy()
+    def atualizar_totais_sku(self, filtro=""):
+        for widget in self.sku_totals_scroll.winfo_children():
+            widget.destroy()
+        filtro = filtro.lower().strip()
+        skus_filtrados = {
+            sku: total 
+            for sku, total in self.sku_totals.items() 
+            if filtro in str(sku).lower()
+        }
+        self.renderizar_totais_sku(skus_filtrados)
+
+    def renderizar_totais_sku(self, skus_totais):
+        for widget in self.sku_totals_scroll.winfo_children():
+            widget.destroy()
     
-            self.sku_totals = {}
-            for entry_qtd, _ in self.entry_widgets:
-                sku = entry_qtd.sku_associado
-                qtd = float(entry_qtd.get()) if entry_qtd.get() else 0
-                self.sku_totals[sku] = self.sku_totals.get(sku, 0) + qtd
+        sorted_skus = sorted(skus_totais.items(), key=lambda x: str(x[0]))
         
-            total_itens = len(self.entry_widgets)
-            total_qtd = sum(float(entry_qtd.get()) if entry_qtd.get() else 0 for entry_qtd, _ in self.entry_widgets)
-            self.total_itens_value.configure(text=str(total_itens))
-            self.total_qtd_value.configure(text=self.format_number(total_qtd))
+        max_columns = 4
+        row = 0
+        col = 0
+
+        for sku, total in sorted_skus:
+            item_frame = ctk.CTkFrame(self.sku_totals_scroll, fg_color="#2a2a2a", corner_radius=8)
+            item_frame.grid(row=row, column=col, padx=5, pady=2, sticky="w")
+
+            sku_str = self.format_number(sku)
+            total_str = self.format_number(total)
+
+            ctk.CTkLabel(
+                item_frame, 
+                text=sku_str,
+                text_color="#FF5555",
+                font=("Arial", 10, "bold"),
+                anchor="w"
+            ).pack(side="left")
+
+            ctk.CTkLabel(item_frame, text=" = ").pack(side="left")
+
+            ctk.CTkLabel(
+                item_frame, 
+                text=total_str,
+                text_color="#55FF55",
+                font=("Arial", 10, "bold"),
+                anchor="w"
+            ).pack(side="left")
             
-            sorted_skus = sorted(self.sku_totals.items(), key=lambda x: str(x[0]))
-            
-            max_columns = 4  
-            row = 0
-            col = 0
+            col += 1
+            if col >= max_columns:
+                col = 0
+                row += 1
+        
+    def update_sku_totals(self, event=None):
+        self.sku_totals = {}
+        for entry_qtd, _ in self.entry_widgets:
+            sku = entry_qtd.sku_associado
+            qtd = float(entry_qtd.get()) if entry_qtd.get() else 0
+            self.sku_totals[sku] = self.sku_totals.get(sku, 0) + qtd
 
-            for sku, total in sorted_skus:
-                item_frame = ctk.CTkFrame(self.sku_totals_scroll, fg_color="#2a2a2a", corner_radius=8)
-                item_frame.grid(row=row, column=col, padx=5, pady=2, sticky="w")
-
-                sku_str = self.format_number(sku)
-                total_str = self.format_number(total)
-
-                ctk.CTkLabel(
-                    item_frame, 
-                    text=sku_str,
-                    text_color="#FF5555",
-                    font=("Arial", 10, "bold"),
-                    anchor="w"
-                ).pack(side="left")
-
-                ctk.CTkLabel(item_frame, text=" = ").pack(side="left")
-
-                ctk.CTkLabel(
-                    item_frame, 
-                    text=total_str,
-                    text_color="#55FF55",
-                    font=("Arial", 10, "bold"),
-                    anchor="w"
-                ).pack(side="left")
-                col += 1
-                if col >= max_columns:
-                    col = 0
-                    row += 1
+        total_itens = len(self.entry_widgets)
+        total_qtd = sum(float(entry_qtd.get()) if entry_qtd.get() else 0 for entry_qtd, _ in self.entry_widgets)
+        self.total_itens_value.configure(text=str(total_itens))
+        self.total_qtd_value.configure(text=self.format_number(total_qtd))
+        self.renderizar_totais_sku(self.sku_totals)
+        filtro_atual = self.filtro_sku_totais.get()
+        if filtro_atual:
+            self.atualizar_totais_sku(filtro_atual)
 
     def update_totals(self, event=None):
         total_itens = len(self.entry_widgets)
