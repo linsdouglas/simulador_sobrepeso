@@ -46,6 +46,14 @@ caminho_base_fisica = os.path.join(fonte_dir, "SIMULADOR_BALANÇA_LIMPO_2.xlsx")
 df_base_fisica = pd.read_excel(caminho_base_fisica, sheet_name="BASE FISICA")
 df_base_familia = pd.read_excel(caminho_base_fisica, 'BASE_FAMILIA')
 
+def converter_para_float_seguro(valor):
+    if pd.isna(valor):
+        return 0.0
+    try:
+        return float(valor)
+    except (ValueError, TypeError):
+        return 0.0
+
 def salvar_em_base_auxiliar(df_remessa, remessa, log_callback):
     caminho_aux = os.path.join(fonte_dir, "expedicao_edicoes.xlsx")
     try:
@@ -92,19 +100,31 @@ def tratar_erro_gen_py(e, log_callback=None):
     return False
 
 def obter_dados_remessa(remessa, df_expedicao, log_callback):
-    caminho_aux = os.path.join(fonte_dir, "expedicao_edicoes.xlsx")
-    if os.path.exists(caminho_aux):
-        try:
-            df_aux = pd.read_excel(caminho_aux, sheet_name="dado_exp", dtype={'REMESSA': str})
-            df_filtrado = df_aux[df_aux['REMESSA'].astype(str) == str(remessa)]
-            
-            if not df_filtrado.empty:
-                log_callback(f"Remessa {remessa} encontrada na base auxiliar (edição)")
-                return df_filtrado.copy()
-        except Exception as e:
-            log_callback(f"[AVISO] Erro ao ler base auxiliar: {e}")
-    log_callback(f"Remessa {remessa} buscada da base original")
-    return df_expedicao[df_expedicao['REMESSA'].astype(str) == str(remessa)].copy()
+    try:
+        remessa_str = str(int(float(remessa))) if '.' in str(remessa) else str(remessa)
+        
+        caminho_aux = os.path.join(fonte_dir, "expedicao_edicoes.xlsx")
+        if os.path.exists(caminho_aux):
+            df_aux = pd.read_excel(caminho_aux, sheet_name="dado_exp")
+            df_aux['REMESSA_COMPARACAO'] = df_aux['REMESSA'].astype(str).str.replace(r'\.0$', '', regex=True)
+            df_filtrado_aux = df_aux[df_aux['REMESSA_COMPARACAO'] == remessa_str].copy()
+            if not df_filtrado_aux.empty:
+                log_callback(f"Remessa {remessa} encontrada na base auxiliar (edicoes)")
+                return df_filtrado_aux.drop(columns=['REMESSA_COMPARACAO'])
+
+        df_expedicao['REMESSA_COMPARACAO'] = df_expedicao['REMESSA'].astype(str).str.replace(r'\.0$', '', regex=True)
+        df_filtrado = df_expedicao[df_expedicao['REMESSA_COMPARACAO'] == remessa_str].copy()
+        
+        if not df_filtrado.empty:
+            log_callback(f"Remessa {remessa} encontrada na base original")
+            return df_filtrado.drop(columns=['REMESSA_COMPARACAO'])
+        
+        log_callback(f"Remessa {remessa} não encontrada em nenhuma base")
+        return pd.DataFrame()
+        
+    except Exception as e:
+        log_callback(f"Erro ao buscar remessa {remessa}: {str(e)}")
+        return pd.DataFrame()
 
 def criar_copia_planilha(fonte_dir, nome_arquivo, log_callback):
     try:
@@ -191,6 +211,7 @@ def buscar_chave_por_endereco(endereco, df_estoque_sep):
     return df_ordenado.iloc[0]['chave_pallete']
 
 def processar_sobrepeso(chave_pallet, sku, peso_base_liq, df_sap, df_sobrepeso_real, df_base_fisica, log_callback):
+    peso_base_liq = converter_para_float_seguro(peso_base_liq)
     sp = 0
     origem_sp = 'não encontrado'
     ajuste_sp = 0
@@ -378,6 +399,12 @@ def calcular_peso_receb_externo(chave, sku, row, df_externo_peso, df_estoque_sep
 
 def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_remessa, df_sku, df_sap, df_sobrepeso_real,
                          df_base_fisica, df_frac, df_estoque_sep, df_externo_peso, log_callback):
+    
+    peso_veiculo_vazio = converter_para_float_seguro(peso_veiculo_vazio)
+    qtd_paletes = converter_para_float_seguro(qtd_paletes)
+    df_remessa['QUANTIDADE'] = df_remessa['QUANTIDADE'].apply(converter_para_float_seguro)
+    df_sku['QTDE_PESO_BRU'] = df_sku['QTDE_PESO_BRU'].apply(converter_para_float_seguro)
+    df_sku['QTDE_PESO_LIQ'] = df_sku['QTDE_PESO_LIQ'].apply(converter_para_float_seguro)
     try:
         remessa_num = int(remessa_num)
     except ValueError:
@@ -745,100 +772,124 @@ def exportar_pdf_com_comtypes(path_xlsx, aba_nome="FORMULARIO", nome_remessa="RE
             log_callback(f"Erro ao exportar PDF: {e}")
         raise
 
-def gerar_relatorio_diferenca(remessa_num, peso_final_balança, peso_veiculo_vazio, df_remessa, df_sku, peso_estimado_total, pasta_excel,log_callback):
-    import os
-    import matplotlib.pyplot as plt
-    from matplotlib.backends.backend_pdf import PdfPages
-    import pandas as pd
+def gerar_relatorio_diferenca(remessa_num, peso_final_balança, peso_veiculo_vazio, df_remessa, df_sku, peso_estimado_total, pasta_excel, log_callback):
+    try:
+        peso_final_balança = converter_para_float_seguro(peso_final_balança)
+        peso_veiculo_vazio = converter_para_float_seguro(peso_veiculo_vazio)
+        peso_estimado_total = converter_para_float_seguro(peso_estimado_total)
+        
+        pasta_destino = os.path.join(pasta_excel, 'Analise_divergencia')
+        os.makedirs(pasta_destino, exist_ok=True)
 
-    pasta_destino = os.path.join(pasta_excel, 'Analise_divergencia')
-    os.makedirs(pasta_destino, exist_ok=True)
+        skus = df_remessa['ITEM'].unique()
+        dados_relatorio = []
+        peso_base_total_liq = 0.0
 
-    skus = df_remessa['ITEM'].unique()
-    dados_relatorio = []
-    peso_base_total_liq = 0
+        for sku in skus:
+            qtd = converter_para_float_seguro(df_remessa[df_remessa['ITEM'] == sku]['QUANTIDADE'].sum())
+            
+            df_sku_filtrado = df_sku[df_sku['COD_PRODUTO'] == sku]
+            if df_sku_filtrado.empty:
+                continue
 
-    for sku in skus:
-        qtd = df_remessa[df_remessa['ITEM'] == sku]['QUANTIDADE'].sum()
-        df_sku_filtrado = df_sku[df_sku['COD_PRODUTO'] == sku]
+            unidade = df_sku_filtrado.iloc[0]['DESC_UNID_MEDID']
+            peso_unit_liq = converter_para_float_seguro(df_sku_filtrado.iloc[0]['QTDE_PESO_LIQ'])
+            peso_total_liq = converter_para_float_seguro(peso_unit_liq * qtd)
+            peso_base_total_liq += peso_total_liq
 
-        if df_sku_filtrado.empty:
-            continue
+            dados_relatorio.append({
+                'SKU': sku,
+                'Unidade': unidade,
+                'Quantidade': qtd,
+                'Peso Total Líquido': peso_total_liq,
+                'Peso Unit. Líquido': peso_unit_liq
+            })
 
-        unidade = df_sku_filtrado.iloc[0]['DESC_UNID_MEDID']
-        peso_unit_liq = df_sku_filtrado.iloc[0]['QTDE_PESO_LIQ']
-        peso_total_liq = qtd * peso_unit_liq
-        peso_base_total_liq += peso_total_liq
+        df_dados = pd.DataFrame(dados_relatorio)
+        peso_carga_real = converter_para_float_seguro(peso_final_balança - peso_veiculo_vazio)
+        diferenca_total = converter_para_float_seguro((peso_estimado_total + peso_veiculo_vazio) - peso_final_balança)
+        
+        if peso_base_total_liq > 0:
+            df_dados['% Peso'] = df_dados['Peso Total Líquido'] / peso_base_total_liq
+        else:
+            df_dados['% Peso'] = 0.0
 
-        dados_relatorio.append({
-            'SKU': sku,
-            'Unidade': unidade,
-            'Quantidade': qtd,
-            'Peso Total Líquido': peso_total_liq,
-            'Peso Unit. Líquido': peso_unit_liq
-        })
+        df_dados['Peso Proporcional Real'] = df_dados['% Peso'] * peso_carga_real
+        df_dados['Quantidade Real Estimada'] = df_dados.apply(
+            lambda x: round(x['Peso Proporcional Real'] / x['Peso Unit. Líquido']) if x['Peso Unit. Líquido'] > 0 else 0,
+            axis=1
+        )
+        
+        df_dados['Diferença Estimada (kg)'] = df_dados['% Peso'] * diferenca_total
+        df_dados['Unid. Estimada de Divergência'] = df_dados['Quantidade Real Estimada'] - df_dados['Quantidade']
 
-    df_dados = pd.DataFrame(dados_relatorio)
+        nome_pdf = f"Análise quantitativa - {remessa_num}.pdf"
+        caminho_pdf = os.path.join(pasta_destino, nome_pdf)
+        fig, ax = plt.subplots(figsize=(10, 6))
+        largura_barra = 0.35
+        x = range(len(df_dados))
 
-    diferenca_total = diferenca_total = (peso_estimado_total + peso_veiculo_vazio) - peso_final_balança
-    peso_carga_real = peso_final_balança - peso_veiculo_vazio
-    df_dados['% Peso'] = df_dados['Peso Total Líquido'] / peso_base_total_liq
-    df_dados['Peso Proporcional Real'] = df_dados['% Peso'] * peso_carga_real
-    df_dados['Quantidade Real Estimada'] = (df_dados['Peso Proporcional Real'] / df_dados['Peso Unit. Líquido']).round()
-    df_dados['Diferença Estimada (kg)'] = df_dados['% Peso'] * diferenca_total
-    df_dados['Unid. Estimada de Divergência'] = df_dados['Quantidade Real Estimada'] - df_dados['Quantidade']
+        qtd_esperada = df_dados['Quantidade']
+        qtd_real = df_dados['Quantidade Real Estimada']
 
-    nome_pdf = f"Análise quantitativa - {remessa_num}.pdf"
-    caminho_pdf = os.path.join(pasta_destino, nome_pdf)
+        ax.bar([i - largura_barra/2 for i in x], qtd_esperada, width=largura_barra, label='Quantidade Esperada')
+        ax.bar([i + largura_barra/2 for i in x], qtd_real, width=largura_barra, label='Quantidade Real Estimada')
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    largura_barra = 0.35
-    x = range(len(df_dados))
+        ax.set_ylabel("Quantidade (unidades)")
+        ax.set_xlabel("SKU")
+        ax.set_title("Comparativo: Quantidade Esperada vs Real Estimada por SKU")
+        ax.set_xticks(x)
+        ax.set_xticklabels(df_dados['SKU'].astype(str))
+        ax.axhline(0, color='gray', linestyle='--')
+        ax.legend()
 
-    qtd_esperada = df_dados['Quantidade']
-    qtd_real = df_dados['Quantidade Real Estimada']
+        for i in x:
+            ax.text(i - largura_barra/2, qtd_esperada.iloc[i], f"{qtd_esperada.iloc[i]:.0f}", ha='center', va='bottom')
+            ax.text(i + largura_barra/2, qtd_real.iloc[i], f"{qtd_real.iloc[i]:.0f}", ha='center', va='bottom')
 
-    ax.bar([i - largura_barra/2 for i in x], qtd_esperada, width=largura_barra, label='Quantidade Esperada')
-    ax.bar([i + largura_barra/2 for i in x], qtd_real, width=largura_barra, label='Quantidade Real Estimada')
+        with PdfPages(caminho_pdf) as pdf:
+            fig_tabela, ax_tabela = plt.subplots(figsize=(12, len(df_dados) * 0.5 + 3))
+            ax_tabela.axis('off')
+            table_data = [
+                ['SKU', 'Unidade', 'Qtd. Enviada', 'Qtd. Real Estimada', 'Peso Total Líquido', '% do Peso', 'Diferença (kg)', 'Divergência (unid)']
+            ] + df_dados[['SKU', 'Unidade', 'Quantidade', 'Quantidade Real Estimada', 'Peso Total Líquido', '% Peso', 'Diferença Estimada (kg)', 'Unid. Estimada de Divergência']].round(2).values.tolist()
 
-    ax.set_ylabel("Quantidade (unidades)")
-    ax.set_xlabel("SKU")
-    ax.set_title("Comparativo: Quantidade Esperada vs Real Estimada por SKU")
-    ax.set_xticks(x)
-    ax.set_xticklabels(df_dados['SKU'].astype(str))
-    ax.axhline(0, color='gray', linestyle='--')
-    ax.legend()
+            tabela = ax_tabela.table(cellText=table_data, colLabels=None, loc='center', cellLoc='center')
+            tabela.auto_set_font_size(False)
+            tabela.set_fontsize(10)
+            tabela.scale(1, 1.5)
 
-    for i in x:
-        ax.text(i - largura_barra/2, qtd_esperada.iloc[i], f"{qtd_esperada.iloc[i]:.0f}", ha='center', va='bottom')
-        ax.text(i + largura_barra/2, qtd_real.iloc[i], f"{qtd_real.iloc[i]:.0f}", ha='center', va='bottom')
+            titulo = f"Relatório Comparativo - Remessa {remessa_num}\nPeso estimado: {peso_estimado_total:.2f} kg | Peso balança: {peso_final_balança:.2f} kg | Peso veículo: {peso_veiculo_vazio:.2f} kg | Diferença: {diferenca_total:.2f} kg"
+            fig_tabela.suptitle(titulo, fontsize=12)
+            pdf.savefig(fig_tabela, bbox_inches='tight')
+            pdf.savefig(fig, bbox_inches='tight')
 
-    with PdfPages(caminho_pdf) as pdf:
-        fig_tabela, ax_tabela = plt.subplots(figsize=(12, len(df_dados) * 0.5 + 3))
-        ax_tabela.axis('off')
-        table_data = [
-            ['SKU', 'Unidade', 'Qtd. Enviada', 'Qtd. Real Estimada', 'Peso Total Líquido', '% do Peso', 'Diferença (kg)', 'Divergência (unid)']
-        ] + df_dados[['SKU', 'Unidade', 'Quantidade', 'Quantidade Real Estimada', 'Peso Total Líquido', '% Peso', 'Diferença Estimada (kg)', 'Unid. Estimada de Divergência']].round(2).values.tolist()
+        plt.close('all')
+        log_callback(f"Relatório salvo em: {caminho_pdf}")
+        return caminho_pdf
 
-        tabela = ax_tabela.table(cellText=table_data, colLabels=None, loc='center', cellLoc='center')
-        tabela.auto_set_font_size(False)
-        tabela.set_fontsize(10)
-        tabela.scale(1, 1.5)
-
-        titulo = f"Relatório Comparativo - Remessa {remessa_num}\nPeso estimado: {peso_estimado_total:.2f} kg | Peso balança: {peso_final_balança:.2f} kg | Peso veículo: {peso_veiculo_vazio:.2f} kg | Diferença: {diferenca_total:.2f} kg"
-        fig_tabela.suptitle(titulo, fontsize=12)
-        pdf.savefig(fig_tabela, bbox_inches='tight')
-        pdf.savefig(fig, bbox_inches='tight')
-
-    plt.close('all')
-    log_callback(f"Relatório salvo em: {caminho_pdf}")
-    return caminho_pdf
+    except Exception as e:
+        log_callback(f"Erro ao gerar relatório de divergência: {str(e)}")
+        raise
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
 class EdicaoRemessaFrame(ctk.CTkFrame):
     def __init__(self, master, df_expedicao, log_callback, app, *args, **kwargs):
         super().__init__(master, *args, **kwargs)
+        self.frame_superior = ctk.CTkFrame(self)
+        self.frame_superior.pack(fill="x", padx=10, pady=(10, 0))
+
+        self.label_status = ctk.CTkLabel(
+            self.frame_superior,
+            text="",
+            text_color="green",
+            font=("Arial", 12, "bold"),
+            corner_radius=5,
+            padx=10,
+            pady=5
+        )
+        self.label_status.pack(fill="x")
         self.df_expedicao = df_expedicao
         self.log_callback = log_callback
         self.app = app
@@ -848,56 +899,71 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
         self.lista_edicao = []
         self.dados_remessa = pd.DataFrame()
         self.sku_totals = {}
+        top_button_frame = ctk.CTkFrame(self)
+        top_button_frame.pack(fill="x", padx=10, pady=5)
+        ctk.CTkButton(
+            top_button_frame, 
+            text="💾 Salvar Alterações", 
+            command=self.salvar_alteracoes,
+            width=150
+        ).pack(side="right", padx=5)
 
-        # Título
-        ctk.CTkLabel(self, text="Edição de Remessa", font=("Arial", 14, "bold")).pack(pady=5)
-        form = ctk.CTkFrame(self)
-        form.pack(pady=10, fill="x")
-        ctk.CTkLabel(form, text="Número da Remessa:").grid(row=0, column=0, sticky="w", padx=5)
-        self.entry_remessa = ctk.CTkEntry(form, textvariable=self.remessa_var)
+        ctk.CTkLabel(top_button_frame, text="Edição de Remessa", font=("Arial", 14, "bold")).pack(side="left", padx=5)
+        form_frame = ctk.CTkFrame(self)
+        form_frame.pack(fill="x", padx=10, pady=5)
+
+        ctk.CTkLabel(form_frame, text="Número da Remessa:").grid(row=0, column=0, sticky="w", padx=5)
+        self.entry_remessa = ctk.CTkEntry(form_frame, textvariable=self.remessa_var)
         self.entry_remessa.grid(row=0, column=1, sticky="ew", padx=5)
-        ctk.CTkButton(form, text="🔎 Buscar", command=self.carregar_dados).grid(row=0, column=2, padx=5)
+        ctk.CTkButton(form_frame, text="🔎 Buscar", command=self.carregar_dados).grid(row=0, column=2, padx=5)
 
-        ctk.CTkLabel(form, text="Filtrar por Chave Pallet:").grid(row=1, column=0, sticky="w", padx=5)
-        self.entry_filtro_chave = ctk.CTkEntry(form, textvariable=self.filtro_chave)
+        ctk.CTkLabel(form_frame, text="Filtrar por Chave Pallet:").grid(row=1, column=0, sticky="w", padx=5)
+        self.entry_filtro_chave = ctk.CTkEntry(form_frame, textvariable=self.filtro_chave)
         self.entry_filtro_chave.grid(row=1, column=1, sticky="ew", padx=5)
         self.entry_filtro_chave.bind("<KeyRelease>", lambda e: self.filtrar_dados())
         
-        ctk.CTkLabel(form, text="Filtrar por SKU:").grid(row=2, column=0, sticky="w", padx=5)
-        self.entry_filtro_sku = ctk.CTkEntry(form, textvariable=self.filtro_sku)
+        ctk.CTkLabel(form_frame, text="Filtrar por SKU:").grid(row=2, column=0, sticky="w", padx=5)
+        self.entry_filtro_sku = ctk.CTkEntry(form_frame, textvariable=self.filtro_sku)
         self.entry_filtro_sku.grid(row=2, column=1, sticky="ew", padx=5)
         self.entry_filtro_sku.bind("<KeyRelease>", lambda e: self.filtrar_dados())
         
-        ctk.CTkButton(form, text="🔍 Aplicar Filtros", command=self.filtrar_dados).grid(row=1, column=2, rowspan=2, padx=5)
-        self.tabela_frame = ctk.CTkScrollableFrame(self, height=300)
-        self.tabela_frame.pack(fill="both", expand=True, pady=10)
-        bottom_frame = ctk.CTkFrame(self)
-        bottom_frame.pack(fill="x", pady=5)
-        totals_frame = ctk.CTkFrame(bottom_frame)
-        totals_frame.pack(side="left", fill="x", expand=True, padx=10)
-        
-        self.total_itens_label = ctk.CTkLabel(totals_frame, text="Total de Itens: 0")
-        self.total_itens_label.pack(side="left", padx=5)
-        
-        self.total_qtd_label = ctk.CTkLabel(totals_frame, text="Quantidade Total: 0")
-        self.total_qtd_label.pack(side="left", padx=5)
-        self.sku_totals_frame = ctk.CTkFrame(bottom_frame)
-        self.sku_totals_frame.pack(side="left", fill="x", expand=True, padx=10)
-        
-        self.sku_totals_label = ctk.CTkLabel(self.sku_totals_frame, text="Totais por SKU: ")
-        self.sku_totals_label.pack(side="left")
-        ctk.CTkButton(bottom_frame, text="💾 Salvar Alterações", command=self.salvar_alteracoes).pack(side="right", padx=10)
-        self.label_status = ctk.CTkLabel(
-            self, 
-            text="",
-            text_color="green",
+        ctk.CTkButton(form_frame, text="🔍 Aplicar Filtros", command=self.filtrar_dados).grid(row=1, column=2, rowspan=2, padx=5)
+        self.frame_horizontal = ctk.CTkFrame(self)
+        self.frame_horizontal.pack(fill="x", padx=10, pady=5)
+        self.tabela_frame = ctk.CTkScrollableFrame(self.frame_horizontal, height=350)
+        self.tabela_frame.pack(side="left", fill="both", expand=True, padx=(0, 5))
+        self.totals_center_frame = ctk.CTkFrame(self.frame_horizontal, width=150, fg_color="#1a1a1a")
+        self.totals_center_frame.pack(side="left", fill="y", padx=5)
+        ctk.CTkLabel(
+            self.totals_center_frame,
+            text="Totais Gerais:",
             font=("Arial", 12, "bold"),
-            corner_radius=5,
-            padx=10,
-            pady=5
-        )
-        self.label_status.pack(pady=5)
-    
+        ).pack(pady=(10, 5))
+
+        self.total_itens_frame = ctk.CTkFrame(self.totals_center_frame, corner_radius=6, fg_color="#2a2a2a")
+        self.total_itens_frame.pack(fill="x", padx=5, pady=2)
+        ctk.CTkLabel(self.total_itens_frame, text="Itens:", text_color="#FF5555").pack(side="left", padx=5)
+        self.total_itens_value = ctk.CTkLabel(self.total_itens_frame, text="0", text_color="#55FF55", font=("Arial", 10, "bold"))
+        self.total_itens_value.pack(side="right", padx=5)
+
+        self.total_qtd_frame = ctk.CTkFrame(self.totals_center_frame, corner_radius=6, fg_color="#2a2a2a")
+        self.total_qtd_frame.pack(fill="x", padx=5, pady=2)
+        ctk.CTkLabel(self.total_qtd_frame, text="Qtd Total:", text_color="#FF5555").pack(side="left", padx=5)
+        self.total_qtd_value = ctk.CTkLabel(self.total_qtd_frame, text="0", text_color="#55FF55", font=("Arial", 10, "bold"))
+        self.total_qtd_value.pack(side="right", padx=5)
+
+        self.sku_totals_lateral = ctk.CTkFrame(self.frame_horizontal, width=250, fg_color="#1f1f1f")
+        self.sku_totals_lateral.pack(side="left", fill="y", padx=(5, 0))
+
+        self.sku_totals_label = ctk.CTkLabel(self.sku_totals_lateral, text="Totais por SKU:")
+        self.sku_totals_label.pack(anchor="w", padx=5, pady=(0, 5))
+        self.filtro_sku_totais = StringVar()
+        self.entry_filtro_sku_totais = ctk.CTkEntry(self.sku_totals_lateral, textvariable=self.filtro_sku_totais, placeholder_text="Filtrar SKU")
+        self.entry_filtro_sku_totais.pack(fill="x", padx=5, pady=(0, 5))
+        self.entry_filtro_sku_totais.bind("<KeyRelease>", lambda e: self.atualizar_totais_sku(filtro=self.filtro_sku_totais.get()))
+        self.sku_totals_scroll = ctk.CTkScrollableFrame(self.sku_totals_lateral, height=350)
+        self.sku_totals_scroll.pack(fill="both", expand=True)
+
     def format_number(self, num):
         if pd.isna(num):
             return "N/A"
@@ -910,54 +976,70 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
             return str(num)
         
     def update_sku_totals(self):
-        for widget in self.sku_totals_frame.winfo_children():
-            if widget != self.sku_totals_label:
+            for widget in self.sku_totals_scroll.winfo_children():
                 widget.destroy()
+    
+            self.sku_totals = {}
+            for entry_qtd, _ in self.entry_widgets:
+                sku = entry_qtd.sku_associado
+                qtd = float(entry_qtd.get()) if entry_qtd.get() else 0
+                self.sku_totals[sku] = self.sku_totals.get(sku, 0) + qtd
         
-        self.sku_totals = {}
-        for entry_qtd, _ in self.entry_widgets:
-            sku = entry_qtd.sku_associado
-            qtd = float(entry_qtd.get()) if entry_qtd.get() else 0
-            self.sku_totals[sku] = self.sku_totals.get(sku, 0) + qtd
-        sorted_skus = sorted(self.sku_totals.items(), key=lambda x: str(x[0]))
-        for sku, total in sorted_skus:
-            item_frame = ctk.CTkFrame(self.sku_totals_frame, fg_color="transparent")
-            item_frame.pack(side="left", padx=3)
-            sku_str = self.format_number(sku)
-            total_str = self.format_number(total)
-            sku_text = sku_str if not pd.isna(sku) else "N/A"
-            sku_label = ctk.CTkLabel(
-                item_frame, 
-                text=sku_text,
-                text_color="#FF5555", 
-                font=("Arial", 10, "bold")
-            )
-            sku_label.pack(side="left")
-            ctk.CTkLabel(item_frame, text=" = ", fg_color="transparent").pack(side="left")
+            total_itens = len(self.entry_widgets)
+            total_qtd = sum(float(entry_qtd.get()) if entry_qtd.get() else 0 for entry_qtd, _ in self.entry_widgets)
+            self.total_itens_value.configure(text=str(total_itens))
+            self.total_qtd_value.configure(text=self.format_number(total_qtd))
+            
+            sorted_skus = sorted(self.sku_totals.items(), key=lambda x: str(x[0]))
+            
+            max_columns = 4  
+            row = 0
+            col = 0
 
-            qtd_label = ctk.CTkLabel(
-                item_frame, 
-                text=total_str,
-                text_color="#55FF55",  
-                font=("Arial", 10, "bold")
-            )
-            qtd_label.pack(side="left")
+            for sku, total in sorted_skus:
+                item_frame = ctk.CTkFrame(self.sku_totals_scroll, fg_color="#2a2a2a", corner_radius=8)
+                item_frame.grid(row=row, column=col, padx=5, pady=2, sticky="w")
+
+                sku_str = self.format_number(sku)
+                total_str = self.format_number(total)
+
+                ctk.CTkLabel(
+                    item_frame, 
+                    text=sku_str,
+                    text_color="#FF5555",
+                    font=("Arial", 10, "bold"),
+                    anchor="w"
+                ).pack(side="left")
+
+                ctk.CTkLabel(item_frame, text=" = ").pack(side="left")
+
+                ctk.CTkLabel(
+                    item_frame, 
+                    text=total_str,
+                    text_color="#55FF55",
+                    font=("Arial", 10, "bold"),
+                    anchor="w"
+                ).pack(side="left")
+                col += 1
+                if col >= max_columns:
+                    col = 0
+                    row += 1
 
     def update_totals(self, event=None):
         total_itens = len(self.entry_widgets)
         total_qtd = sum(float(entry_qtd.get()) if entry_qtd.get() else 0 for entry_qtd, _ in self.entry_widgets)
         
-        self.total_itens_label.configure(text=f"Total de Itens: {total_itens}")
-        self.total_qtd_label.configure(text=f"Quantidade Total: {total_qtd}")
+        self.total_itens_value.configure(text=str(total_itens))
+        self.total_qtd_value.configure(text=self.format_number(total_qtd))
         self.update_sku_totals()
-
     def carregar_dados(self):
-        remessa = self.remessa_var.get()
+        remessa = self.remessa_var.get().strip()
         if not remessa:
             self.log_callback("Digite uma remessa válida.")
             return
+        print(self.df_expedicao.columns)  
+        print(self.df_expedicao['REMESSA'].head(5)) 
         df_filtrado = self.df_expedicao[self.df_expedicao['REMESSA'].astype(str) == remessa].copy()
-
         if df_filtrado.empty:
             self.log_callback("Nenhuma remessa encontrada.")
             return
@@ -1061,62 +1143,98 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Simulador de Sobrepeso 2.0")
-        self.geometry("1000x600")
-        self.df_expedicao = pd.read_excel(
-            os.path.join(fonte_dir, "expedicao.xlsx"),
-            sheet_name="dado_exp",
-            dtype={'REMESSA': str}
-        )
-
-        self.log_tecnico = []
-        self.log_geral = []
-        self.placa = StringVar()
-        self.turno = StringVar()
-        self.remessa = StringVar()
-        self.qtd_paletes = StringVar()
-        self.peso_vazio = StringVar()
-        self.peso_balanca = StringVar()
-        self.log_text = []
-
+        self.title("Simulador de Sobrepeso 3.0")
+        self.placa = ctk.StringVar()
+        self.turno = ctk.StringVar()
+        self.remessa = ctk.StringVar()
+        self.qtd_paletes = ctk.StringVar()
+        self.peso_vazio = ctk.StringVar()
+        self.peso_balanca = ctk.StringVar()
+        self.geometry("1200x1000")
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
-
         self.tabs = ctk.CTkTabview(self)
-        self.tabs.grid(row=0, column=0, columnspan=2, sticky="nsew", padx=20, pady=20)
-
+        self.tabs.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
         self.tab_simulador = self.tabs.add("Simulador")
-        self.tab_edicao = self.tabs.add("Edição de Remessa")
+        self.tab_simulador.grid_rowconfigure(0, weight=1)
+        self.tab_simulador.grid_columnconfigure(0, weight=1)
+        simulador_main_frame = ctk.CTkFrame(self.tab_simulador)
+        simulador_main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        controls_frame = ctk.CTkFrame(simulador_main_frame, width=350)
+        controls_frame.pack(side="left", fill="y", padx=(0, 10), pady=5)
+        logs_frame = ctk.CTkFrame(simulador_main_frame)
+        logs_frame.pack(side="right", fill="both", expand=True, padx=5, pady=5)
+        ctk.CTkLabel(controls_frame, 
+                    text="Configuração do Simulador",
+                    font=("Arial", 14, "bold")).pack(pady=(0, 10), anchor="w")
 
-        formulario_frame = ctk.CTkFrame(self.tab_simulador)
-        formulario_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        campos = [
+            ("Placa:", self.placa, None),
+            ("Turno:", self.turno, ["A", "B", "C"]),
+            ("Remessa:", self.remessa, None),
+            ("Quantidade de Paletes:", self.qtd_paletes, None),
+            ("Peso Veículo Vazio (kg):", self.peso_vazio, None),
+            ("Peso Final Balança (kg):", self.peso_balanca, None)
+        ]
 
-        ctk.CTkLabel(formulario_frame, text="Placa:").pack(anchor="w")
-        ctk.CTkEntry(formulario_frame, textvariable=self.placa).pack(fill="x")
-        ctk.CTkLabel(formulario_frame, text="Turno:").pack(anchor="w")
-        ctk.CTkComboBox(formulario_frame, values=["A", "B", "C"], variable=self.turno).pack(fill="x")
-        ctk.CTkLabel(formulario_frame, text="Remessa:").pack(anchor="w")
-        ctk.CTkEntry(formulario_frame, textvariable=self.remessa).pack(fill="x")
-        ctk.CTkLabel(formulario_frame, text="Quantidade de Paletes:").pack(anchor="w")
-        ctk.CTkEntry(formulario_frame, textvariable=self.qtd_paletes).pack(fill="x")
-        ctk.CTkLabel(formulario_frame, text="Peso Veículo Vazio:").pack(anchor="w")
-        ctk.CTkEntry(formulario_frame, textvariable=self.peso_vazio).pack(fill="x")
-        ctk.CTkLabel(formulario_frame, text="Peso Final Balança:").pack(anchor="w")
-        ctk.CTkEntry(formulario_frame, textvariable=self.peso_balanca).pack(fill="x")
-        ctk.CTkButton(formulario_frame, text="Calcular", command=self.iniciar_processamento).pack(pady=10)
-        ctk.CTkButton(formulario_frame, text="🔄 Refresh Bases", command=self.atualizar_bases).pack(pady=5)
+        for texto, var, valores in campos:
+            ctk.CTkLabel(controls_frame, text=texto).pack(anchor="w", pady=(5, 0))
+            if valores:
+                ctk.CTkComboBox(controls_frame, values=valores, variable=var).pack(fill="x", pady=(0, 5))
+            else:
+                ctk.CTkEntry(controls_frame, textvariable=var).pack(fill="x", pady=(0, 5))
 
-        self.progress_bar = ctk.CTkProgressBar(formulario_frame, mode="determinate")
+        button_frame = ctk.CTkFrame(controls_frame, fg_color="transparent")
+        button_frame.pack(fill="x", pady=10)
+
+        ctk.CTkButton(button_frame, 
+                    text="Calcular", 
+                    command=self.iniciar_processamento,
+                    fg_color="#2aa745").pack(side="left", expand=True, padx=2)
+        
+        ctk.CTkButton(button_frame, 
+                    text="🔄 Refresh", 
+                    command=self.atualizar_bases,
+                    width=80).pack(side="right", padx=2)
+
+        self.progress_bar = ctk.CTkProgressBar(controls_frame, mode="determinate")
         self.progress_bar.set(0)
-        self.progress_bar.pack(pady=10, fill="x")
+        self.progress_bar.pack(fill="x", pady=(5, 0))
         self.progress_bar.pack_forget()
-        logs_frame = ctk.CTkFrame(self.tab_simulador)
-        logs_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
-        ctk.CTkLabel(logs_frame, text="📜 Histórico de Logs:").pack(anchor="w")
-        self.log_display = ctk.CTkTextbox(logs_frame, wrap="word", width=400, height=400)
+        logs_header = ctk.CTkFrame(logs_frame, fg_color="transparent")
+        logs_header.pack(fill="x", pady=(0, 5))
+
+        ctk.CTkLabel(logs_header, 
+                    text="📜 Histórico de Execução",
+                    font=("Arial", 14, "bold")).pack(side="left", padx=5)
+        ctk.CTkButton(logs_header, 
+                    text="🧹 Limpar Histórico", 
+                    command=self.limpar_logs,
+                    width=120,
+                    fg_color="#d44646",
+                    hover_color="#a33535").pack(side="right")
+
+        self.log_display = ctk.CTkTextbox(
+            logs_frame, 
+            wrap="word",
+            font=("Consolas", 10),  
+            activate_scrollbars=True
+        )
         self.log_display.pack(fill="both", expand=True)
-        ctk.CTkButton(logs_frame, text="🧹 Limpar Histórico", command=self.limpar_logs).pack(anchor="e", pady=10)
+
+        self.log_display.configure(state="disabled")
+        self.log_text = []
+        self.log_geral = []
+        self.log_tecnico = []
+
+        self.tab_edicao = self.tabs.add("Edição de Remessa")
+        self.df_expedicao = pd.read_excel(
+            os.path.join(fonte_dir, "expedicao.xlsx"), 
+            sheet_name="dado_exp",
+            dtype={"REMESSA": str}
+        )
+        self.df_expedicao["REMESSA"] = self.df_expedicao["REMESSA"].str.replace(r"\.0$", "", regex=True)
         self.edicao_frame = EdicaoRemessaFrame(
             master=self.tab_edicao,
             df_expedicao=self.df_expedicao,   
@@ -1124,7 +1242,13 @@ class App(ctk.CTk):
             app=self
         )
         self.edicao_frame.pack(fill="both", expand=True, padx=10, pady=10)
-        footer_label = ctk.CTkLabel(self, text="Desenvolvido por Douglas Lins - Analista de Logística", font=("Arial", 10), anchor="center")
+
+        footer_label = ctk.CTkLabel(
+            self, 
+            text="Desenvolvido por Douglas Lins - Analista de Logística", 
+            font=("Arial", 10), 
+            anchor="center"
+        )
         footer_label.grid(row=1, column=0, columnspan=2, pady=(0, 10))
 
     def atualizar_bases(self):
@@ -1136,6 +1260,7 @@ class App(ctk.CTk):
             path_base_frac = os.path.join(fonte_dir, "FRACAO_1.xlsx")
             path_base_estoque = os.path.join(fonte_dir, "estoqueseparacao.xlsx")
             path_base_peso_exter = os.path.join(fonte_dir,"receb_extern_peso.xlsx")
+            path_base_aux = os.path.join(fonte_dir, "expedicao_edicoes.xlsx")
 
             excel = win32.gencache.EnsureDispatch('Excel.Application')
             excel.Visible = False
@@ -1143,27 +1268,41 @@ class App(ctk.CTk):
             self.add_log("Atualizando base da expedição, Aguarde...")
             time.sleep(30)
             wb.Close(False)
+            if os.path.exists(path_base_aux):
+                wb_aux = excel.Workbooks.Open(path_base_aux)
+                self.add_log("Atualizando base auxiliar de edições, Aguarde...")
+                time.sleep(10)
+                wb_aux.Close(False)
+            
             excel.Quit()
 
             mod_time = os.path.getmtime(path_base_expedicao)
             data_mod = datetime.fromtimestamp(mod_time).strftime("%d/%m/%Y %H:%M:%S")
-
+            
             global df_sap, df_estoque_sep, df_externo_peso, df_frac, df_expedicao, df_sobrepeso_real
-            df_externo_peso=pd.read_excel(path_base_peso_exter, sheet_name="Sheet1")
+            df_externo_peso = pd.read_excel(path_base_peso_exter, sheet_name="Sheet1")
             df_estoque_sep = pd.read_excel(path_base_estoque)
-            df_frac=pd.read_excel(path_base_frac, sheet_name="FRACAO")
+            df_frac = pd.read_excel(path_base_frac, sheet_name="FRACAO")
             df_sap = pd.read_excel(path_base_sap, sheet_name="Sheet1")
-            df_expedicao = pd.read_excel(path_base_expedicao, sheet_name="dado_exp")
-            df_sobrepeso_real = pd.read_excel(path_base_sobrepeso, sheet_name="SOBREPESO")
-            for child in self.tab_edicao.winfo_children():
-                child.destroy()  
-            self.edicao_frame = EdicaoRemessaFrame(
-                master=self.tab_edicao,
-                df_expedicao=df_expedicao,
-                log_callback=self.add_log
+            
+            df_expedicao = pd.read_excel(
+                path_base_expedicao, 
+                sheet_name="dado_exp",
+                dtype={'REMESSA': str}
             )
-            self.edicao_frame.pack(fill="both", expand=True, padx=10, pady=10)
+            df_expedicao['REMESSA'] = df_expedicao['REMESSA'].str.replace(r'\.0$', '', regex=True).astype(str)
+            
+            df_sobrepeso_real = pd.read_excel(path_base_sobrepeso, sheet_name="SOBREPESO")
+            self.edicao_frame.df_expedicao = df_expedicao
+            self.df_expedicao = df_expedicao  
+            self.edicao_frame.remessa_var.set("")
+            self.edicao_frame.filtro_chave.set("")
+            self.edicao_frame.filtro_sku.set("")
+            for widget in self.edicao_frame.tabela_frame.winfo_children():
+                widget.destroy()
+            
             self.add_log(f"Bases atualizadas com sucesso! Última modificação: {data_mod}")
+            
         except Exception as e:
             self.add_log(f"Erro ao atualizar bases: {e}")
         
@@ -1201,6 +1340,15 @@ class App(ctk.CTk):
         thread.start()
 
     def processar(self):
+        try:
+            remessa_input = self.remessa.get()
+            if '.' in remessa_input:
+                remessa = int(float(remessa_input))
+            else:
+                remessa = int(remessa_input)
+        except ValueError:
+            self.log_callback_completo("Formato de remessa inválido! Digite apenas números.")
+            return
         self.progress_bar.set(0.1)
         path_base_sobrepeso = os.path.join(fonte_dir, "Base_sobrepeso_real.xlsx")
         path_base_expedicao = os.path.join(fonte_dir, "expedicao.xlsx")
@@ -1214,7 +1362,7 @@ class App(ctk.CTk):
         df_sap = pd.read_excel(path_base_sap, sheet_name="Sheet1")
         df_expedicao = pd.read_excel(path_base_expedicao, sheet_name="dado_exp", 
                                 dtype={'REMESSA': str}) 
-        df_expedicao['REMESSA'] = pd.to_numeric(df_expedicao['REMESSA'], errors='coerce') 
+        df_expedicao['REMESSA'] = df_expedicao['REMESSA'].str.replace('.0', '').astype(str) 
         df_sobrepeso_real = pd.read_excel(path_base_sobrepeso, sheet_name="SOBREPESO")
         df_sobrepeso_real['DataHora'] = pd.to_datetime(df_sobrepeso_real['DataHora'])
         df_base_fisica = pd.read_excel(caminho_base_fisica, sheet_name="BASE FISICA")
