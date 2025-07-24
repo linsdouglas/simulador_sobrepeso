@@ -1283,11 +1283,14 @@ class App(ctk.CTk):
         self.log_tecnico = []
 
         self.tab_edicao = self.tabs.add("Edição de Remessa")
-        self.df_expedicao = pd.read_excel(
-            os.path.join(fonte_dir, "expedicao.xlsx"), 
-            sheet_name="dado_exp",
-            dtype={"REMESSA": str}
-        )
+        caminho_excel = os.path.join(fonte_dir, "expedicao.xlsx")
+        with pd.ExcelFile(caminho_excel) as xls:
+            unica_aba = xls.sheet_names[0]
+            self.df_expedicao = pd.read_excel(
+                xls,
+                sheet_name=unica_aba,
+                dtype={"REMESSA": str}
+            )
         self.df_expedicao["REMESSA"] = self.df_expedicao["REMESSA"].str.replace(r"\.0$", "", regex=True)
         self.edicao_frame = EdicaoRemessaFrame(
             master=self.tab_edicao,
