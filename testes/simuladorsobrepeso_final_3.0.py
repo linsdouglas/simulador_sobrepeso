@@ -555,8 +555,8 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_remessa
 
     peso_com_sobrepeso = peso_base_total + sp_total
     log_callback(f"Peso com sobrepeso: {peso_com_sobrepeso:.2f} kg")
-    peso_total_com_paletes = peso_com_sobrepeso + (qtd_paletes * 22) + peso_veiculo_vazio
-    log_callback(f"Peso total com paletes ({qtd_paletes} x 22kg): {peso_total_com_paletes:.2f} kg")
+    peso_total_com_paletes = peso_com_sobrepeso + (qtd_paletes * 25) + peso_veiculo_vazio
+    log_callback(f"Peso total com paletes ({qtd_paletes} x 25kg): {peso_total_com_paletes:.2f} kg")
     media_sp_geral = (sum(item['sp'] for item in itens_detalhados) / len(itens_detalhados)) if itens_detalhados else 0.0
     log_callback(f"Média geral de sobrepeso (entre {len(itens_detalhados)} itens): {media_sp_geral:.4f}")
 
@@ -704,7 +704,7 @@ def preencher_formulario_com_openpyxl(path_copia, dados, itens_detalhados, log_c
         ws["B17"] = dados['peso_total_final']
         ws["B18"] = dados['peso_total_final'] * (1 - sp_neg)
         ws["D4"] = dados['qtd_paletes']
-        ws["D9"] = dados['qtd_paletes'] * 22
+        ws["D9"] = dados['qtd_paletes'] * 25
 
         linha_inicio = 12
         linha_fim = 46
@@ -877,6 +877,7 @@ ctk.set_default_color_theme("green")
 class EdicaoRemessaFrame(ctk.CTkFrame):
     def __init__(self, master, df_expedicao, log_callback, app, *args, **kwargs):
         super().__init__(master, *args, **kwargs)
+        self.df_expedicao_original = df_expedicao.dropna(subset=['ITEM']).copy()
         self.frame_superior = ctk.CTkFrame(self)
         self.frame_superior.pack(fill="x", padx=10, pady=(10, 0))
 
@@ -901,6 +902,14 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
         self.sku_totals = {}
         top_button_frame = ctk.CTkFrame(self)
         top_button_frame.pack(fill="x", padx=10, pady=5)
+        ctk.CTkButton(
+            top_button_frame, 
+            text="➕ Adicionar Linha", 
+            command=self.adicionar_linha,
+            width=150,
+            fg_color="#2a7fff"
+        ).pack(side="left", padx=5)
+    
         ctk.CTkButton(
             top_button_frame, 
             text="💾 Salvar Alterações", 
@@ -1057,6 +1066,9 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
         print(self.df_expedicao.columns)  
         print(self.df_expedicao['REMESSA'].head(5)) 
         df_filtrado = self.df_expedicao[self.df_expedicao['REMESSA'].astype(str) == remessa].copy()
+        df_filtrado = self.df_expedicao_original[
+            self.df_expedicao_original['REMESSA'].astype(str) == remessa
+        ].dropna(subset=['ITEM']).copy()
         if df_filtrado.empty:
             self.log_callback("Nenhuma remessa encontrada.")
             return
@@ -1112,57 +1124,59 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
 
     def renderizar_tabela(self, df_filtrado=None):
         self.salvar_alteracoes_antes_filtro()
-        if df_filtrado is None:
-            df_filtrado = self.dados_remessa.copy()
+        df_limpo = self.dados_remessa.dropna(subset=['ITEM']).copy()
+        if df_filtrado is not None:
+            df_limpo = df_filtrado.dropna(subset=['ITEM']).copy()
         for widget in self.tabela_frame.winfo_children():
             widget.destroy()
-    
         headers = ["SKU", "Quantidade", "Chave Pallet", "Ações"]
         for col, header in enumerate(headers):
             ctk.CTkLabel(self.tabela_frame, text=header, font=("Arial", 12, "bold")).grid(
                 row=0, column=col, padx=10, pady=5
             )
         self.entry_widgets = []
-        for idx, row in df_filtrado.iterrows():
-            original_idx = row.name if hasattr(row, 'name') else idx
-            
-            sku = str(row['ITEM'])
-            qtd = str(row['QUANTIDADE'])
+        for idx, row in df_limpo.iterrows():
+            original_idx = row.name
+            sku = str(row['ITEM']) if pd.notna(row['ITEM']) else ""
+            qtd = str(row['QUANTIDADE']) if pd.notna(row['QUANTIDADE']) else "0"
             chave = str(row['CHAVE_PALETE']) if pd.notna(row['CHAVE_PALETE']) else ""
             ctk.CTkLabel(self.tabela_frame, text=sku).grid(
                 row=idx + 1, column=0, padx=10
             )
-            
             entry_qtd = ctk.CTkEntry(self.tabela_frame)
             entry_qtd.insert(0, qtd)
             entry_qtd.grid(row=idx + 1, column=1, padx=10)
             entry_qtd.sku_associado = sku
-            entry_qtd.original_idx = original_idx 
+            entry_qtd.original_idx = original_idx
             entry_qtd.bind("<KeyRelease>", self.update_totals)
-            
             entry_chave = ctk.CTkEntry(self.tabela_frame)
             entry_chave.insert(0, chave)
             entry_chave.grid(row=idx + 1, column=2, padx=10)
-            entry_chave.original_idx = original_idx  
-            
+            entry_chave.original_idx = original_idx
             botao_excluir = ctk.CTkButton(
                 self.tabela_frame,
                 text="🗑",
                 width=30,
-                command=lambda idx=original_idx: self.remover_linha(idx)  
+                command=lambda idx=original_idx: self.remover_linha(idx)
             )
             botao_excluir.grid(row=idx + 1, column=3, padx=5)
-        
+            
             self.entry_widgets.append((entry_qtd, entry_chave))
-    
+        
         self.update_totals()
 
     def remover_linha(self, index):
-        if 0 <= index < len(self.dados_remessa):
-            self.dados_remessa = self.dados_remessa.drop(index).reset_index(drop=True)
-            self.renderizar_tabela(self.dados_remessa[['ITEM', 'QUANTIDADE', 'CHAVE_PALETE']])
-            self.label_status.configure(text="Linha removida com sucesso!", text_color="green")
-            self.log_callback(f"Linha {index} removida da remessa {self.remessa_var.get()}")
+        try:
+            if 0 <= index < len(self.dados_remessa):
+                novo_df = self.dados_remessa.drop(index).reset_index(drop=True)
+                novo_df = novo_df.dropna(subset=['ITEM'])
+                self.dados_remessa = novo_df
+                self.renderizar_tabela()
+                self.label_status.configure(text="Linha removida com sucesso!", text_color="green")
+                self.log_callback(f"Linha {index} removida da remessa {self.remessa_var.get()}")
+        except Exception as e:
+            self.log_callback(f"Erro ao remover linha: {str(e)}")
+            self.update_totals()
 
     def salvar_alteracoes(self):
         try:
@@ -1170,15 +1184,16 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
             if not remessa:
                 self.log_callback("Nenhuma remessa selecionada para salvar")
                 return
-            df_completo = self.dados_remessa.copy()
-            
+            df_completo = self.dados_remessa.dropna(subset=['ITEM']).copy()
             for idx, (entry_qtd, entry_chave) in enumerate(self.entry_widgets):
-                if idx < len(df_completo):  
-                    df_completo.at[idx, 'QUANTIDADE'] = float(entry_qtd.get()) if entry_qtd.get() else 0
+                if idx < len(df_completo):
+                    qtd = entry_qtd.get()
+                    df_completo.at[idx, 'QUANTIDADE'] = float(qtd) if qtd else 0.0
                     chave = entry_chave.get()
                     df_completo.at[idx, 'CHAVE_PALETE'] = chave if chave else None
+            
             df_completo['REMESSA'] = remessa
-        
+
             salvar_em_base_auxiliar(df_completo, remessa, self.log_callback)
             
             self.label_status.configure(
