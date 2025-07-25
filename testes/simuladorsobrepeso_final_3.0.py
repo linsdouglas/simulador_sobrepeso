@@ -54,30 +54,57 @@ def converter_para_float_seguro(valor):
     except (ValueError, TypeError):
         return 0.0
 
-def salvar_em_base_auxiliar(df_remessa, remessa, log_callback):
+def salvar_em_base_auxiliar(df_remessa, remessa, log_callback, fonte_dir):
     caminho_aux = os.path.join(fonte_dir, "expedicao_edicoes.xlsx")
     try:
-        if not os.path.exists(caminho_aux):
-            with pd.ExcelWriter(caminho_aux, engine='openpyxl') as writer:
-                df_remessa.to_excel(writer, sheet_name="dado_exp", index=False)
-            log_callback(f"Arquivo auxiliar criado em {caminho_aux}")
-            return
-        with pd.ExcelFile(caminho_aux) as xls:
-            if "dado_exp" in xls.sheet_names:
-                df_existente = pd.read_excel(xls, sheet_name="dado_exp")
-                df_existente = df_existente[df_existente['REMESSA'].astype(str) != str(remessa)]
-            else:
-                df_existente = pd.DataFrame()
+        if os.path.exists(caminho_aux):
+            with pd.ExcelFile(caminho_aux) as xls:
+                if "dado_exp" in xls.sheet_names:
+                    df_existente = pd.read_excel(xls, sheet_name="dado_exp")
+                    df_existente = df_existente[df_existente['REMESSA'].astype(str).str.replace(r'\.0$', '', regex=True) != str(remessa)]
+                else:
+                    df_existente = pd.DataFrame()
+        else:
+            df_existente = pd.DataFrame()
         df_atualizado = pd.concat([df_existente, df_remessa], ignore_index=True)
-        
         with pd.ExcelWriter(caminho_aux, engine='openpyxl') as writer:
             df_atualizado.to_excel(writer, sheet_name="dado_exp", index=False)
         
-        log_callback(f"Remessa {remessa} completamente atualizada na base auxiliar!")
+        log_callback(f"Remessa {remessa} completamente atualizada na base auxiliar! (Registros antigos removidos)")
 
     except Exception as e:
         log_callback(f"[ERRO ao salvar em base auxiliar]: {e}")
         raise
+
+def carregar_base_auxiliar(fonte_dir):
+    caminho_aux = os.path.join(fonte_dir, "expedicao_edicoes.xlsx")
+    try:
+        if os.path.exists(caminho_aux):
+            with pd.ExcelFile(caminho_aux) as xls:
+                if "dado_exp" in xls.sheet_names:
+                    return pd.read_excel(xls, sheet_name="dado_exp")
+        return pd.DataFrame()
+    except Exception as e:
+        print(f"Erro ao carregar base auxiliar: {e}")
+        return pd.DataFrame()
+
+def remover_remessa_base_auxiliar(remessa, fonte_dir, log_callback):
+    try:
+        caminho_aux = os.path.join(fonte_dir, "expedicao_edicoes.xlsx")
+        if not os.path.exists(caminho_aux):
+            return
+        
+        with pd.ExcelFile(caminho_aux) as xls:
+            if "dado_exp" in xls.sheet_names:
+                df = pd.read_excel(xls, sheet_name="dado_exp")
+                df = df[df['REMESSA'].astype(str) != str(remessa)]
+                
+                with pd.ExcelWriter(caminho_aux, engine='openpyxl') as writer:
+                    df.to_excel(writer, sheet_name="dado_exp", index=False)
+                
+                log_callback(f"Remessa {remessa} removida da base auxiliar")
+    except Exception as e:
+        log_callback(f"Erro ao remover remessa da base auxiliar: {e}")
 
 def tratar_erro_gen_py(e, log_callback=None):
     erro_str = str(e)
@@ -877,6 +904,8 @@ ctk.set_default_color_theme("green")
 class EdicaoRemessaFrame(ctk.CTkFrame):
     def __init__(self, master, df_expedicao, log_callback, app, *args, **kwargs):
         super().__init__(master, *args, **kwargs)
+        self.fonte_dir = fonte_dir
+        self.remessa_editada = False
         self.df_expedicao_original = df_expedicao.dropna(subset=['ITEM']).copy()
         self.dados_remessa = pd.DataFrame(columns=['ITEM', 'QUANTIDADE', 'CHAVE_PALETE'])
         self.frame_superior = ctk.CTkFrame(self)
@@ -899,7 +928,6 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
         self.filtro_chave = StringVar()
         self.filtro_sku = StringVar()
         self.lista_edicao = []
-        self.dados_remessa = pd.DataFrame()
         self.sku_totals = {}
         top_button_frame = ctk.CTkFrame(self)
         top_button_frame.pack(fill="x", padx=10, pady=5)
@@ -1092,20 +1120,63 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
             self.update_sku_totals()
         except Exception as e:
             self.log_callback(f"Erro ao atualizar totais: {str(e)}")
+
+    def remessa_existe_na_base(self, remessa, df_base):
+        """Comparação segura de remessa, ignorando .0 e diferenças de formatação"""
+        if df_base.empty or 'REMESSA' not in df_base.columns:
+            return False
+        
+        try:
+            remessas_base = df_base['REMESSA'].dropna().astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+            remessa_busca = str(remessa).replace('.0', '').strip()
+            return remessa_busca in remessas_base.values
+        except Exception as e:
+            self.log_callback(f"Erro ao verificar remessa: {str(e)}")
+            return False
+    
     def carregar_dados(self):
         remessa = self.remessa_var.get().strip()
         if not remessa:
             self.log_callback("Digite uma remessa válida.")
             return
+        
         try:
-            df_filtrado = self.df_expedicao_original[
-                self.df_expedicao_original['REMESSA'].astype(str) == remessa
-            ].dropna(subset=['ITEM']).copy()
+            self.log_callback(f"Verificando base auxiliar para remessa {remessa}...")
+            df_base_auxiliar = carregar_base_auxiliar(self.fonte_dir)
             
-            if df_filtrado.empty:
-                self.log_callback("Nenhuma remessa encontrada.")
-                return
-            
+            if not df_base_auxiliar.empty:
+                self.log_callback(f"Base auxiliar carregada com {len(df_base_auxiliar)} registros")
+                remessas_aux = df_base_auxiliar['REMESSA'].dropna().astype(str).str.replace(r'\.0$', '', regex=True)
+                self.log_callback(f"Remessas encontradas na base auxiliar: {', '.join(remessas_aux.unique())}")
+                
+                if self.remessa_existe_na_base(remessa, df_base_auxiliar):
+                    self.remessa_editada = True
+                    self.label_status.configure(
+                        text="ATENÇÃO: Esta remessa já foi editada anteriormente!",
+                        text_color="orange"
+                    )
+                    self.log_callback(f"Remessa {remessa} encontrada na base auxiliar - carregando dados editados")
+                    df_filtrado = df_base_auxiliar[
+                        df_base_auxiliar['REMESSA'].astype(str).str.replace(r'\.0$', '', regex=True) == remessa
+                    ]
+                else:
+                    self.log_callback(f"Remessa {remessa} não encontrada na base auxiliar - buscando na base original")
+            else:
+                self.log_callback("Base auxiliar vazia ou não encontrada - buscando na base original")
+
+            if not self.remessa_editada:
+                self.log_callback(f"Buscando remessa {remessa} na base original...")
+                df_filtrado = self.df_expedicao_original[
+                    self.df_expedicao_original['REMESSA'].astype(str) == remessa
+                ].dropna(subset=['ITEM']).copy()
+                
+                if df_filtrado.empty:
+                    self.log_callback("Remessa não encontrada em nenhuma base!")
+                    self.label_status.configure(
+                        text="Remessa não encontrada em nenhuma base!",
+                        text_color="red"
+                    )
+                    return
             colunas_unicas = ['ITEM', 'QUANTIDADE', 'CHAVE_PALETE']
             df_sem_duplicatas = df_filtrado.drop_duplicates(subset=colunas_unicas)
             
@@ -1117,14 +1188,14 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
             self.renderizar_tabela()
             
         except Exception as e:
-            self.log_callback(f"Erro ao carregar dados: {str(e)}")
+            error_msg = f"Erro ao carregar dados: {str(e)}"
+            self.log_callback(error_msg)
             self.label_status.configure(
-                text=f"Erro ao carregar remessa: {str(e)}",
+                text=error_msg,
                 text_color="red"
             )
-
+            self.log_callback(f"Traceback completo: {traceback.format_exc()}")
     def filtrar_dados(self):
-        """Filtra os dados sem perder as alterações."""
         self.salvar_alteracoes_antes_filtro()
         filtro_chave = self.filtro_chave.get().strip().lower()
         filtro_sku = self.filtro_sku.get().strip().lower()
@@ -1282,6 +1353,7 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
                         'CHAVE_PALETE': None
                     }
                     df_completo = pd.concat([df_completo, pd.DataFrame([nova_linha])], ignore_index=True)
+                
                 if entry_sku:
                     sku = entry_sku.get()
                 else:
@@ -1293,13 +1365,14 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
                 df_completo.at[idx, 'CHAVE_PALETE'] = chave if chave else None
             
             df_completo = df_completo.dropna(subset=['ITEM'])
-            df_completo['REMESSA'] = remessa
-            salvar_em_base_auxiliar(df_completo, remessa, self.log_callback)
+            df_completo['REMESSA'] = remessa            
+            salvar_em_base_auxiliar(df_completo, remessa, self.log_callback, self.fonte_dir)
             self.dados_remessa = df_completo.copy()
+            self.remessa_editada = True 
             self.renderizar_tabela()
             
             self.label_status.configure(
-                text="Alterações salvas com sucesso!",
+                text="Alterações salvas com sucesso!" + (" (Remessa atualizada)" if self.remessa_editada else ""),
                 text_color="green"
             )
             self.log_callback(f"Alterações da remessa {remessa} salvas com sucesso")
