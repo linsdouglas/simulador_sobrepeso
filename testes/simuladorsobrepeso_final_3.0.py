@@ -1435,17 +1435,12 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
             if not remessa:
                 self.log_callback("Nenhuma remessa selecionada para salvar")
                 return
-
-            # Criar novo DataFrame limpo
             df_completo = pd.DataFrame(columns=['ITEM', 'QUANTIDADE', 'CHAVE_PALETE'])
-            
-            # Coletar dados dos widgets
             for entry_sku, entry_qtd, entry_chave in self.entry_widgets:
                 sku = entry_sku.get() if entry_sku else getattr(entry_qtd, 'sku_associado', '')
                 qtd = entry_qtd.get() if entry_qtd.get() else "0"
                 chave = entry_chave.get() if entry_chave else ""
 
-                # Validar dados
                 if not sku or str(sku).strip() == "":
                     continue
                     
@@ -1453,8 +1448,6 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
                     qtd = float(qtd)
                 except ValueError:
                     qtd = 0.0
-                    
-                # Adicionar ao DataFrame
                 new_row = pd.DataFrame([{
                     'ITEM': str(sku).strip(),
                     'QUANTIDADE': qtd,
@@ -1463,28 +1456,21 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
                 
                 df_completo = pd.concat([df_completo, new_row], ignore_index=True)
 
-            # Verificar se há dados válidos
             if df_completo.empty:
                 self.label_status.configure(
                     text="Nenhum dado válido para salvar!",
                     text_color="orange"
                 )
                 return
-                
-            # Adicionar remessa e remover duplicatas
             df_completo['REMESSA'] = remessa
             df_completo = df_completo.drop_duplicates(
                 subset=['ITEM', 'CHAVE_PALETE'],
                 keep='last'
             )
-
-            # Salvar na base auxiliar
             salvar_em_base_auxiliar(df_completo, remessa, self.log_callback, self.fonte_dir)
             
-            # Atualizar dados locais (usando cópia para evitar referência)
             self.dados_remessa = df_completo[['ITEM', 'QUANTIDADE', 'CHAVE_PALETE']].copy()
             
-            # Forçar recriação completa da tabela
             self.renderizar_tabela()
             
             self.label_status.configure(
