@@ -597,8 +597,8 @@ def calcular_peso_final(remessa_num, peso_veiculo_vazio, qtd_paletes, df_remessa
 
     peso_com_sobrepeso = peso_base_total + sp_total
     log_callback(f"Peso com sobrepeso: {peso_com_sobrepeso:.2f} kg")
-    peso_total_com_paletes = peso_com_sobrepeso + (qtd_paletes * 25) + peso_veiculo_vazio
-    log_callback(f"Peso total com paletes ({qtd_paletes} x 25kg): {peso_total_com_paletes:.2f} kg")
+    peso_total_com_paletes = peso_com_sobrepeso + (qtd_paletes * 22) + peso_veiculo_vazio
+    log_callback(f"Peso total com paletes ({qtd_paletes} x 22kg): {peso_total_com_paletes:.2f} kg")
     media_sp_geral = (sum(item['sp'] for item in itens_detalhados) / len(itens_detalhados)) if itens_detalhados else 0.0
     log_callback(f"Média geral de sobrepeso (entre {len(itens_detalhados)} itens): {media_sp_geral:.4f}")
 
@@ -746,7 +746,7 @@ def preencher_formulario_com_openpyxl(path_copia, dados, itens_detalhados, log_c
         ws["B17"] = dados['peso_total_final']
         ws["B18"] = dados['peso_total_final'] * (1 - sp_neg)
         ws["D4"] = dados['qtd_paletes']
-        ws["D9"] = dados['qtd_paletes'] * 25
+        ws["D9"] = dados['qtd_paletes'] * 22
 
         linha_inicio = 12
         linha_fim = 46
