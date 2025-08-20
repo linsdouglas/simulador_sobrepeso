@@ -81,7 +81,7 @@ def login_sap():
             EC.presence_of_element_located((By.XPATH, "//input[@type='password' and @name='passwd']"))
         )
         password_field.clear()
-        password_field.send_keys("8583*Doug")
+        password_field.send_keys("8583@Doug")
         password_field.send_keys(Keys.ENTER)
         print("printin efetuado com sucesso.")
         time.sleep(5)
