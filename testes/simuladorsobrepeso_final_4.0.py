@@ -24,9 +24,6 @@ import openpyxl
 import comtypes.client
 import re
 
-# =========================
-#  LOCALIZAÇÃO DE PASTAS
-# =========================
 
 def _find_onedrive_subfolder(subfolder_name: str):
     user_dir = os.environ.get("USERPROFILE", "")
@@ -45,49 +42,30 @@ BASE_DIR_AUD = _find_onedrive_subfolder("Gestão de Estoque - Gestão_Auditoria"
 if not BASE_DIR_AUD:
     raise FileNotFoundError("Pasta 'Gestão de Estoque - Gestão_Auditoria' não encontrada no OneDrive.")
 
-# =========================
-#  BASES FIXAS
-# =========================
 
 caminho_base_fisica = os.path.join(BASE_DIR_DOCS, "SIMULADOR_BALANÇA_LIMPO_2.xlsx")
 df_base_fisica = pd.read_excel(caminho_base_fisica, sheet_name="BASE FISICA")
 df_base_familia = pd.read_excel(caminho_base_fisica, "BASE_FAMILIA")
 
-# =========================
-#  HELPERS
-# =========================
 
 def _norm_remessa_tuple(s):
-    """
-    Retorna (com_zeros, sem_zeros) sempre como strings numéricas.
-    Aceita valores com aspas, espaços, '.0', etc.
-    """
     if s is None:
         return ("", "")
     ss = str(s).strip().strip("'").strip('"')
-    ss = re.sub(r'\.0$', '', ss)              # remove .0 do fim
-    dig = re.sub(r'\D', '', ss)               # só dígitos
+    ss = re.sub(r'\.0$', '', ss)              
+    dig = re.sub(r'\D', '', ss)               
     if dig == "":
         return ("", "")
     sem_zeros = dig.lstrip('0') or "0"
     return (dig, sem_zeros)
 
 def _match_remessa_series(sr, alvo):
-    """
-    Compara uma Series com remessas ao alvo, aceitando com/sem zeros à esquerda.
-    """
     a, b = _norm_remessa_tuple(alvo)
     if a == "" and b == "":
         return pd.Series(False, index=sr.index)
     vals = sr.astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
     vals = vals.str.replace(r'\D', '', regex=True)
     return (vals == a) | (vals == b)
-def _coerce_num(x):
-    try:
-        # suporta "216", "216,0", "216.0"
-        return float(str(x).replace(",", "."))
-    except:
-        return np.nan
 
 def converter_para_float_seguro(valor):
     if pd.isna(valor):
@@ -97,20 +75,15 @@ def converter_para_float_seguro(valor):
     except (ValueError, TypeError):
         return 0.0
 
-# =========================
-#  EXPEDIÇÃO (CSV NOVO)
-# =========================
 
 def ler_csv_corretamente(csv_path, log=lambda x: print(x)):
     log(f"[loader] Processando arquivo: {os.path.basename(csv_path)}")
-    # latin1 é o mais comum nesses dumps
     with open(csv_path, "r", encoding="latin1", errors="ignore") as f:
         linhas = [ln.strip() for ln in f if ln.strip()]
 
     if not linhas:
         raise ValueError("Arquivo CSV vazio ou inválido")
 
-    # split por ';' (o mais comum nesses relatórios)
     rows = [ln.split(";") for ln in linhas]
     header = rows[0]
     alvo_cols = len(header)
@@ -122,7 +95,6 @@ def ler_csv_corretamente(csv_path, log=lambda x: print(x)):
             data.append(line)
         else:
             problemas += 1
-            # corrige truncando/extrapolando com vazio
             fix = (line + [""] * alvo_cols)[:alvo_cols]
             data.append(fix)
 
@@ -133,77 +105,12 @@ def ler_csv_corretamente(csv_path, log=lambda x: print(x)):
     log(f"[loader] Linhas após correção: {len(df)} | Colunas: {list(df.columns)}")
     return df
 
-def _pick_col(df, candidatos):
-    # tenta match exato (case-insensitive)
-    mapa_exato = {c.strip().lower(): c for c in df.columns}
-    for cand in candidatos:
-        k = cand.strip().lower()
-        if k in mapa_exato:
-            return mapa_exato[k]
-
-    # tenta normalizar espaços/underscores
-    norm_cols = {c.strip().lower().replace(" ", "_"): c for c in df.columns}
-    for cand in candidatos:
-        k = cand.strip().lower().replace(" ", "_")
-        if k in norm_cols:
-            return norm_cols[k]
-
-    # tenta por "contains" (cand dentro de col)
-    for cand in candidatos:
-        k = cand.strip().lower()
-        for c in df.columns:
-            if k in c.strip().lower():
-                return c
-
-    # tenta por "contains" invertido (col dentro de cand)
-    for c in df.columns:
-        k = c.strip().lower()
-        for cand in candidatos:
-            if k in cand.strip().lower():
-                return c
-    return None
-
-def _coerce_num_locale(v):
-    if v is None:
-        return 0.0
-    s = str(v).strip()
-    if s == "" or s.lower() in ("nan", "none", "null"):
-        return 0.0
-
-    # aceita 1.234,56 / 1,234.56 / 1234,56 / 1234.56
-    if s.count(",") == 1 and s.count(".") >= 1:
-        # 1.234,56 -> 1234,56
-        s = s.replace(".", "").replace(",", ".")
-    else:
-        s = s.replace(",", ".")
-
-    try:
-        return float(s)
-    except:
-        # tenta pegar o primeiro token numérico
-        for tok in s.replace(",", ".").split():
-            try:
-                return float(tok)
-            except:
-                continue
-        return 0.0
-
-
-
-def _looks_remessa(s: str) -> bool:
-    s = str(s).strip()
-    return s.isdigit() and (len(s) >= 7)  # ex.: 2355615 ou 0002355615
-
-def _looks_item5(s: str) -> bool:
-    s = str(s).strip()
-    return s.isdigit() and (len(s) == 5)
 
 def _nonempty_ratio(sr: pd.Series) -> float:
     s = sr.astype(str).str.strip()
     return (s != "").mean()
 
 def _pick_best_remessa_col(df: pd.DataFrame) -> str:
-    # prioriza coluna com maioria numérica e tamanho >=7
     candidatos = []
     for c in df.columns:
         vals = df[c].astype(str).str.strip()
@@ -215,7 +122,6 @@ def _pick_best_remessa_col(df: pd.DataFrame) -> str:
     return candidatos[0][1]
 
 def _pick_best_item_col(df: pd.DataFrame) -> str:
-    # prioriza coluna com maioria 5 dígitos
     candidatos = []
     for c in df.columns:
         vals = df[c].astype(str).str.strip()
@@ -225,7 +131,6 @@ def _pick_best_item_col(df: pd.DataFrame) -> str:
     return candidatos[0][1]
 
 def _coerce_num_locale_strict(v):
-    # sempre devolve float (0.0 fallback)
     if v is None:
         return 0.0
     s = str(v).strip()
@@ -250,7 +155,6 @@ def carregar_base_expedicao_csv(base_dir: str, log=print):
     if not os.path.exists(path_csv):
         raise FileNotFoundError(f"'rastreabilidade.csv' não encontrado: {path_csv}")
 
-    # 1) leitura tolerante
     try:
         df_raw = pd.read_csv(path_csv, sep=";", encoding="utf-8-sig", dtype=str)
         log(f"[loader] pandas OK com sep=';', enc='utf-8-sig' -> {len(df_raw)} linhas, {len(df_raw.columns)} colunas")
@@ -266,7 +170,6 @@ def carregar_base_expedicao_csv(base_dir: str, log=print):
     except Exception:
         pass
 
-    # 2) localizar colunas candidatas
     col_vol   = next((c for c in df_raw.columns if "VOLUME" in c.upper()), None)
     col_chave = next((c for c in df_raw.columns if "COD_RASTREABILIDADE" in c.upper()), None)
     col_tipo  = next((c for c in df_raw.columns if "TIPO_RASTREABILIDADE" in c.upper()), None)
@@ -275,7 +178,6 @@ def carregar_base_expedicao_csv(base_dir: str, log=print):
     if "COD_RASTREABILIDADE" in df_raw.columns:
         col_chave = "COD_RASTREABILIDADE"
 
-    # se ainda não achou, usa heurística (prefixo M + dígitos)
     if not col_chave:
         scores = []
         for c in df_raw.columns:
@@ -287,8 +189,6 @@ def carregar_base_expedicao_csv(base_dir: str, log=print):
 
     log(f"[loader] CHAVE_PALETE: {col_chave}")
     
-
-    # 3) heurística de deslocamento
     volume_muito_vazio = (col_vol is not None) and (_nonempty_ratio(df_raw[col_vol]) < 0.05)
     lote_muito_numerico = False
     if lote_col:
@@ -304,7 +204,6 @@ def carregar_base_expedicao_csv(base_dir: str, log=print):
     if deslocado:
         log("[loader] ⚠️ padrão de deslocamento detectado: VOLUME quase vazio + LOTE numérico + DESC_ITEM parecendo LOTE")
 
-    # 4) escolher REMESSA real
     def _ratio_remessa(col):
         v = df_raw[col].astype(str).str.strip()
         return (v.str.fullmatch(r"\d{7,}")).mean()
@@ -316,17 +215,14 @@ def carregar_base_expedicao_csv(base_dir: str, log=print):
         remessa_col = _pick_best_remessa_col(df_raw)
         log(f"[loader] REMESSA escolhida por heurística: {remessa_col}")
 
-    # 5) escolher ITEM (5 dígitos), evitando usar a mesma coluna da remessa
     candidates_item = [c for c in df_raw.columns if c != remessa_col]
     if candidates_item:
         best_item = _pick_best_item_col(df_raw[candidates_item]) if hasattr(pd.DataFrame, "__getitem__") else _pick_best_item_col(df_raw)
-        # _pick_best_item_col espera um DF; se você mantiver como está, funciona
-        # mas aqui forçamos uma escolha que não conflite:
+
         item_col = best_item if best_item != remessa_col else _pick_best_item_col(df_raw)
     else:
         item_col = _pick_best_item_col(df_raw)
 
-    # 6) escolher CHAVE_PALETE
     if not col_chave:
         scores = []
         for c in df_raw.columns:
@@ -337,7 +233,6 @@ def carregar_base_expedicao_csv(base_dir: str, log=print):
         col_chave = scores[0][1]
     log(f"[loader] CHAVE_PALETE: {col_chave}")
 
-    # 7) escolher QUANTIDADE
     qty_series = None
     qty_src = None
     def _series_all_zero_or_empty(s):
@@ -347,16 +242,15 @@ def carregar_base_expedicao_csv(base_dir: str, log=print):
         nums = ss.map(_coerce_num_locale_strict)
         return (pd.Series(nums).fillna(0.0).abs() < 1e-12).mean() > 0.95
 
-    # prioridade 1: coluna de VOLUME se existir e não for toda zerada/vazia
     if col_vol and not _series_all_zero_or_empty(df_raw[col_vol]):
         qty_series = df_raw[col_vol]
         qty_src = col_vol
-    # prioridade 2: se deslocado e LOTE for numérico, usar LOTE
+
     elif deslocado and lote_col is not None and not _series_all_zero_or_empty(df_raw[lote_col]):
         qty_series = df_raw[lote_col]
         qty_src = lote_col + " (ajustado de deslocamento)"
     else:
-        # prioridade 3: coluna mais numérica, EXCLUINDO as colunas já usadas (remessa, item, chave)
+
         ban = set([remessa_col, item_col, col_chave])
         best = None
         best_score = -1
@@ -374,7 +268,6 @@ def carregar_base_expedicao_csv(base_dir: str, log=print):
 
     log(f"[loader] QUANTIDADE será lida de: {qty_src}")
 
-    # 8) monta dataframe final + limpeza
     df = pd.DataFrame({
         "REMESSA":      df_raw[remessa_col].astype(str).str.strip(),
         "ITEM":         df_raw[item_col].astype(str).str.strip(),
@@ -382,19 +275,16 @@ def carregar_base_expedicao_csv(base_dir: str, log=print):
         "QUANTIDADE":   qty_series.map(_coerce_num_locale_strict).astype(float).abs()
     })
 
-    # filtra por CHAVE se não for zerar tudo
     if col_tipo in df_raw.columns:
         tipos = df_raw[col_tipo].astype(str).str.upper().str.contains("CHAVE")
         if tipos.mean() > 0.05:
             df = df[tipos.values]
             log(f"[loader] filtro TIPO_RASTREABILIDADE aplicado (CHAVE) → {len(df)} linhas")
 
-    # normalizações finais
     df["REMESSA"] = df["REMESSA"].str.replace(r"\.0$", "", regex=True)
     df = df[(df["REMESSA"] != "") & (df["ITEM"] != "") & (df["CHAVE_PALETE"] != "")]
     df = df.drop_duplicates(subset=["REMESSA", "ITEM", "CHAVE_PALETE", "QUANTIDADE"], keep="last").reset_index(drop=True)
 
-    # diagnóstico
     log(f"[loader] após seleção de colunas => {df.shape}")
     log(f"[loader] stats QUANTIDADE -> min={df['QUANTIDADE'].min():.2f} max={df['QUANTIDADE'].max():.2f}")
     remessas = sorted(df["REMESSA"].unique().tolist())
@@ -405,11 +295,6 @@ def carregar_base_expedicao_csv(base_dir: str, log=print):
 
     return df
 
-
-
-# =========================
-#  BASE AUXILIAR (EDIÇÃO)
-# =========================
 
 def salvar_em_base_auxiliar(df_remessa, remessa, log_callback, fonte_dir):
     caminho_aux = os.path.join(fonte_dir, "expedicao_edicoes.xlsx")
@@ -478,13 +363,9 @@ def remover_remessa_base_auxiliar(remessa, fonte_dir, log_callback):
     except Exception as e:
         log_callback(f"Erro ao remover remessa da base auxiliar: {e}")
 
-# =========================
-#  BUSCA DE REMESSA
-# =========================
 
 def obter_dados_remessa(remessa, df_expedicao, log_callback):
     try:
-        # tenta primeiro na base auxiliar (se existir) SEM converter para número
         caminho_aux = os.path.join(BASE_DIR_DOCS, "expedicao_edicoes.xlsx")
         if os.path.exists(caminho_aux):
             df_aux = pd.read_excel(caminho_aux, sheet_name="dado_exp")
@@ -494,7 +375,6 @@ def obter_dados_remessa(remessa, df_expedicao, log_callback):
                 log_callback(f"Remessa {remessa} encontrada na base auxiliar (edicoes)")
                 return df_filtrado_aux
 
-        # agora a base original
         mask_ori = _match_remessa_series(df_expedicao['REMESSA'], remessa)
         df_filtrado = df_expedicao.loc[mask_ori].copy()
 
@@ -508,12 +388,6 @@ def obter_dados_remessa(remessa, df_expedicao, log_callback):
     except Exception as e:
         log_callback(f"Erro ao buscar remessa {remessa}: {str(e)}")
         return pd.DataFrame()
-
-
-
-# =========================
-#  E-MAIL / IMPRESSÃO / EXPORT
-# =========================
 
 def criar_copia_planilha(fonte_dir, nome_arquivo, log_callback):
     try:
@@ -602,10 +476,6 @@ def exportar_pdf_com_comtypes(path_xlsx, aba_nome="FORMULARIO", nome_remessa="RE
             log_callback(f"Erro ao exportar PDF: {e}")
         raise
 
-# =========================
-#  CÁLCULO DE SOBREPESO
-# =========================
-
 def calculo_sobrepeso_fixo(sku, df_base_fisica, peso_base_liq, log_callback):
     try:
         sp_row = df_base_fisica[df_base_fisica["CÓDIGO PRODUTO"] == sku]
@@ -665,7 +535,6 @@ def processar_sobrepeso(chave_pallet, sku, peso_base_liq, df_sap, df_sobrepeso_r
                     sp = 0.0
                     ajuste_sp = 0.0
                     origem_sp = "fixo"
-        # se a coluna da linha não existir, cai no fixo
 
     if sp == 0:
         sp_valor, ajuste_fixo = calculo_sobrepeso_fixo(sku, df_base_fisica, peso_base_liq, log_callback)
@@ -762,10 +631,6 @@ def calcular_peso_final(
         itens_detalhados
     )
 
-# =========================
-#  LIMITES / FORMULÁRIO / RELATÓRIO
-# =========================
-
 def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_familia, df_sobrepeso_tabela, df_sku, df_remessa, df_fracao, log_callback):
     total_quantidade = 0
     quantidade_com_sp_real = 0
@@ -785,7 +650,6 @@ def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_f
             origem = item.get("origem", "fixo")
             sp = item.get("sp", 0)
             chave = item.get("chave_pallet", "")
-            # se df_fracao vier vazio, sempre cai no else
             if not df_fracao.empty and "chave_pallete" in df_fracao.columns and chave in df_fracao["chave_pallete"].values:
                 qtd = pd.to_numeric(df_fracao[df_fracao["chave_pallete"] == chave]["qtd"], errors="coerce").sum()
             else:
@@ -1008,9 +872,6 @@ def gerar_relatorio_diferenca(remessa_num, peso_final_balança, peso_veiculo_vaz
         log_callback(f"Erro ao gerar relatório de divergência: {str(e)}")
         raise
 
-# =========================
-#  UI
-# =========================
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
@@ -1095,7 +956,6 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
         self.sku_totals_scroll = ctk.CTkScrollableFrame(self.sku_totals_lateral, height=350)
         self.sku_totals_scroll.pack(fill="both", expand=True)
 
-    # --- métodos auxiliares da UI ---
 
     def format_number(self, num):
         if pd.isna(num):
@@ -1421,7 +1281,7 @@ class App(ctk.CTk):
         footer_label = ctk.CTkLabel(self, text="Desenvolvido por Douglas Lins - Analista de Logística", font=("Arial", 10), anchor="center")
         footer_label.grid(row=1, column=0, columnspan=2, pady=(0, 10))
 
-    # ---- métodos da App ----
+
 
     def atualizar_bases(self):
         try:
@@ -1431,13 +1291,13 @@ class App(ctk.CTk):
 
             df_expedicao = carregar_base_expedicao_csv(BASE_DIR_AUD, log=self.add_log)
 
-            _ = pd.read_excel(path_base_sap, sheet_name="Sheet1")         # valida acesso
-            _ = pd.read_excel(path_base_sobrepeso, sheet_name="SOBREPESO") # valida acesso
+            _ = pd.read_excel(path_base_sap, sheet_name="Sheet1")       
+            _ = pd.read_excel(path_base_sobrepeso, sheet_name="SOBREPESO") 
 
             self.edicao_frame.df_expedicao = df_expedicao
             self.df_expedicao = df_expedicao
 
-            # limpar filtros e tabela
+           
             self.edicao_frame.remessa_var.set("")
             self.edicao_frame.filtro_chave.set("")
             self.edicao_frame.filtro_sku.set("")
@@ -1483,19 +1343,15 @@ class App(ctk.CTk):
         try:
             self.progress_bar.set(0.1)
 
-            # entradas da UI
             remessa = int(float(self.remessa.get()))
             peso_vazio = float(self.peso_vazio.get())
             peso_balanca = float(self.peso_balanca.get())
             qtd_paletes = int(float(self.qtd_paletes.get()))
 
-            # arquivos fixos (Documentos)
             path_base_sobrepeso = os.path.join(BASE_DIR_DOCS, "Base_sobrepeso_real.xlsx")
             path_base_sap       = os.path.join(BASE_DIR_DOCS, "base_sap.xlsx")
-            # cópia do formulário
             file_path = criar_copia_planilha(BASE_DIR_DOCS, "SIMULADOR_BALANÇA_LIMPO_2.xlsx", self.add_log)
 
-            # bases necessárias
             with pd.ExcelFile(file_path) as xl:
                 df_sku = xl.parse("dado_sku")
 
@@ -1504,7 +1360,6 @@ class App(ctk.CTk):
             df_sobrepeso_real = pd.read_excel(path_base_sobrepeso, sheet_name="SOBREPESO")
             df_sobrepeso_real["DataHora"] = pd.to_datetime(df_sobrepeso_real["DataHora"])
 
-            # remessa
             df_remessa = obter_dados_remessa(remessa, df_expedicao, log_callback=self.add_log)
             if df_remessa.empty:
                 disponiveis = sorted(df_expedicao["REMESSA"].dropna().unique().tolist())
@@ -1514,7 +1369,6 @@ class App(ctk.CTk):
 
             self.progress_bar.set(0.5)
 
-            # cálculo
             resultado = calcular_peso_final(
                 remessa,
                 peso_vazio,
@@ -1533,7 +1387,6 @@ class App(ctk.CTk):
 
             peso_base, sp_total, peso_com_sp, peso_final, media_sp, itens_detalhados = resultado
 
-            # dados p/ formulário
             dados = {
                 'remessa': remessa,
                 'qtd_skus': df_expedicao[df_expedicao['REMESSA'].astype(str)
@@ -1550,7 +1403,6 @@ class App(ctk.CTk):
                 'qtd_paletes': qtd_paletes
             }
 
-            # df_fracao não é mais usado → passa um DF vazio
             df_fracao_vazio = pd.DataFrame(columns=['chave_pallete', 'qtd'])
 
             preencher_formulario_com_openpyxl(
@@ -1616,9 +1468,6 @@ class App(ctk.CTk):
             self.log_callback_completo(f"Erro: {str(e)}")
             messagebox.showerror("Erro", f"Erro ao processar: {str(e)}")
 
-# =========================
-#  MAIN
-# =========================
 
 if __name__ == "__main__":
     app = App()
