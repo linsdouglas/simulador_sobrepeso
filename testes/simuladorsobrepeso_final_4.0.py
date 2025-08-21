@@ -7,22 +7,19 @@ import threading
 import subprocess
 from datetime import datetime
 from collections import defaultdict, Counter
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
-
 import customtkinter as ctk
 from tkinter import messagebox, StringVar
-
 from pathlib import Path
 from shutil import copyfile
-
 from openpyxl import load_workbook
 import openpyxl
 import comtypes.client
 import re
+import unicodedata
 
 
 def _find_onedrive_subfolder(subfolder_name: str):
@@ -43,10 +40,6 @@ if not BASE_DIR_AUD:
     raise FileNotFoundError("Pasta 'Gestão de Estoque - Gestão_Auditoria' não encontrada no OneDrive.")
 
 
-caminho_base_fisica = os.path.join(BASE_DIR_DOCS, "SIMULADOR_BALANÇA_LIMPO_2.xlsx")
-df_base_fisica = pd.read_excel(caminho_base_fisica, sheet_name="BASE FISICA")
-df_base_familia = pd.read_excel(caminho_base_fisica, "BASE_FAMILIA")
-
 
 def _norm_remessa_tuple(s):
     if s is None:
@@ -60,12 +53,30 @@ def _norm_remessa_tuple(s):
     return (dig, sem_zeros)
 
 def _match_remessa_series(sr, alvo):
+    # força Series
+    if not isinstance(sr, pd.Series):
+        sr = pd.Series(sr)
+    # normaliza alvo
     a, b = _norm_remessa_tuple(alvo)
     if a == "" and b == "":
         return pd.Series(False, index=sr.index)
-    vals = sr.astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-    vals = vals.str.replace(r'\D', '', regex=True)
-    return (vals == a) | (vals == b)
+
+    vals = (sr.astype(str)
+              .str.strip()
+              .str.replace(r'\.0$', '', regex=True)
+              .str.replace(r'\D', '', regex=True))
+    vals_no0 = vals.str.lstrip('0')
+    vals_no0 = vals_no0.where(vals_no0 != "", "0")
+
+    a_no0 = (a.lstrip('0') or '0')
+    b_no0 = (b.lstrip('0') or '0')
+
+    mask = (vals.eq(a) | vals.eq(b) | vals_no0.eq(a_no0) | vals_no0.eq(b_no0))
+    # garante mesmo índice e dtype bool
+    mask = mask.reindex(sr.index).fillna(False).astype(bool)
+    return mask
+
+
 
 def converter_para_float_seguro(valor):
     if pd.isna(valor):
@@ -76,225 +87,88 @@ def converter_para_float_seguro(valor):
         return 0.0
 
 
-def ler_csv_corretamente(csv_path, log=lambda x: print(x)):
-    log(f"[loader] Processando arquivo: {os.path.basename(csv_path)}")
-    with open(csv_path, "r", encoding="latin1", errors="ignore") as f:
-        linhas = [ln.strip() for ln in f if ln.strip()]
+EXPECTED_COLS = [
+    "ID","LOCAL_EXPEDICAO","REMESSA","COD_ITEM","DESC_ITEM","LOTE",
+    "CASEWHENA.EXCLUIDO_POR_LOGINISNULLTHENA.VOLUMEELSE-1*A.VOLUMEEND",
+    "UOM","DATA_VALIDADE","COD_RASTREABILIDADE","TIPO_RASTREABILIDADE",
+    "CREATED_AT","CRIADO_POR_LOGIN","ATUALIZADO_POR_LOGIN",
+    "UPDATED_AT","DELETED_AT","EXCLUIDO_POR_LOGIN"
+]
 
-    if not linhas:
-        raise ValueError("Arquivo CSV vazio ou inválido")
+def _split_fix(parts, n):
+    """Garante exatamente n campos por linha."""
+    if len(parts) > n:
+        head = parts[:n-1]
+        tail = ";".join(parts[n-1:])
+        return head + [tail]
+    elif len(parts) < n:
+        return parts + [""] * (n - len(parts))
+    return parts
 
-    rows = [ln.split(";") for ln in linhas]
-    header = rows[0]
-    alvo_cols = len(header)
-
-    data = []
-    problemas = 0
-    for i, line in enumerate(rows[1:], start=2):
-        if len(line) == alvo_cols:
-            data.append(line)
-        else:
-            problemas += 1
-            fix = (line + [""] * alvo_cols)[:alvo_cols]
-            data.append(fix)
-
-    if problemas:
-        log(f"[loader][AVISO] Corrigidas {problemas} linhas com contagem de colunas inconsistente")
-
-    df = pd.DataFrame(data, columns=header)
-    log(f"[loader] Linhas após correção: {len(df)} | Colunas: {list(df.columns)}")
-    return df
-
-
-def _nonempty_ratio(sr: pd.Series) -> float:
-    s = sr.astype(str).str.strip()
-    return (s != "").mean()
-
-def _pick_best_remessa_col(df: pd.DataFrame) -> str:
-    candidatos = []
-    for c in df.columns:
-        vals = df[c].astype(str).str.strip()
-        num_mask = vals.str.fullmatch(r"\d+")
-        long_mask = vals.str.len() >= 7
-        score = (num_mask & long_mask).mean()
-        candidatos.append((score, c))
-    candidatos.sort(reverse=True)
-    return candidatos[0][1]
-
-def _pick_best_item_col(df: pd.DataFrame) -> str:
-    candidatos = []
-    for c in df.columns:
-        vals = df[c].astype(str).str.strip()
-        mask = vals.str.fullmatch(r"\d{5}")
-        candidatos.append((mask.mean(), c))
-    candidatos.sort(reverse=True)
-    return candidatos[0][1]
-
-def _coerce_num_locale_strict(v):
-    if v is None:
-        return 0.0
-    s = str(v).strip()
-    if s == "" or s.lower() in ("nan", "none", "null"):
-        return 0.0
-    if s.count(",") == 1 and s.count(".") >= 1:
-        s = s.replace(".", "").replace(",", ".")
+def ler_csv_corretamente(csv_path, log=print):
+    """Lê o CSV alinhando header e linhas para EXACTAMENTE 17 colunas."""
+    for enc in ("utf-8-sig","utf-8","latin1","cp1252"):
+        try:
+            with open(csv_path, "r", encoding=enc, errors="replace") as f:
+                lines = [ln.rstrip("\r\n") for ln in f if ln.strip()]
+            break
+        except Exception:
+            continue
     else:
-        s = s.replace(",", ".")
-    try:
-        return float(s)
-    except:
-        for tok in s.replace(",", ".").split():
-            try:
-                return float(tok)
-            except:
-                continue
-        return 0.0
+        raise RuntimeError("Falha ao ler CSV com encodings testados.")
+
+    # encontra a linha do cabeçalho (a que contém 'ID' e 'REMESSA')
+    header_idx = None
+    for i, ln in enumerate(lines):
+        ps = ln.split(";")
+        if ("ID" in ps) and ("REMESSA" in ps):
+            header_idx = i
+            break
+    if header_idx is None:
+        header_idx = 0
+
+    header = _split_fix(lines[header_idx].split(";"), len(EXPECTED_COLS))
+    rows = []
+    for ln in lines[header_idx+1:]:
+        rows.append(_split_fix(ln.split(";"), len(EXPECTED_COLS)))
+
+    df = pd.DataFrame(rows, columns=EXPECTED_COLS, dtype=str)
+    # limpeza leve
+    df.columns = [c.strip() for c in df.columns]
+    for c in ("UPDATED_AT","DELETED_AT","EXCLUIDO_POR_LOGIN"):
+        if c in df.columns:
+            df[c] = df[c].str.replace(r";+$", "", regex=True).str.strip()
+    return df
 
 def carregar_base_expedicao_csv(base_dir: str, log=print):
     path_csv = os.path.join(base_dir, "rastreabilidade.csv")
     if not os.path.exists(path_csv):
-        raise FileNotFoundError(f"'rastreabilidade.csv' não encontrado: {path_csv}")
+        raise FileNotFoundError(f"'rastreabilidade.csv' não encontrado em: {path_csv}")
 
-    try:
-        df_raw = pd.read_csv(path_csv, sep=";", encoding="utf-8-sig", dtype=str)
-        log(f"[loader] pandas OK com sep=';', enc='utf-8-sig' -> {len(df_raw)} linhas, {len(df_raw.columns)} colunas")
-    except Exception as e:
-        log(f"[loader] fallback latin1: {e}")
-        df_raw = pd.read_csv(path_csv, sep=";", encoding="latin1", dtype=str)
-        log(f"[loader] pandas OK com sep=';', enc='latin1' -> {len(df_raw)} linhas, {len(df_raw.columns)} colunas")
+    df_raw = ler_csv_corretamente(path_csv, log=log)
 
-    log(f"[loader] colunas no CSV: {list(df_raw.columns)}")
-    log("[loader] 5 primeiras linhas brutas:")
-    try:
-        log(df_raw.head().to_string(index=False))
-    except Exception:
-        pass
+    # mapeamento direto (sem heurística/guess)
+    col_remessa = "REMESSA"
+    col_item = "COD_ITEM"
+    col_chave = "COD_RASTREABILIDADE"
+    col_vol = "CASEWHENA.EXCLUIDO_POR_LOGINISNULLTHENA.VOLUMEELSE-1*A.VOLUMEEND"
 
-    col_vol   = next((c for c in df_raw.columns if "VOLUME" in c.upper()), None)
-    col_chave = next((c for c in df_raw.columns if "COD_RASTREABILIDADE" in c.upper()), None)
-    col_tipo  = next((c for c in df_raw.columns if "TIPO_RASTREABILIDADE" in c.upper()), None)
-    lote_col  = next((c for c in df_raw.columns if c.upper() == "LOTE"), None)
-    desc_col  = next((c for c in df_raw.columns if "DESC_ITEM" in c.upper()), None)
-    if "COD_RASTREABILIDADE" in df_raw.columns:
-        col_chave = "COD_RASTREABILIDADE"
-
-    if not col_chave:
-        scores = []
-        for c in df_raw.columns:
-            vals = df_raw[c].astype(str).str.strip()
-            m = vals.str.match(r"^M\d+")
-            scores.append((m.mean(), c))
-        scores.sort(reverse=True)
-        col_chave = scores[0][1]
-
-    log(f"[loader] CHAVE_PALETE: {col_chave}")
-    
-    volume_muito_vazio = (col_vol is not None) and (_nonempty_ratio(df_raw[col_vol]) < 0.05)
-    lote_muito_numerico = False
-    if lote_col:
-        am = pd.to_numeric(df_raw[lote_col].str.replace(",", ".", regex=False), errors="coerce")
-        lote_muito_numerico = am.notna().mean() > 0.5
-
-    desc_parece_lote = False
-    if desc_col:
-        desc_vals = df_raw[desc_col].astype(str).str.strip()
-        desc_parece_lote = (desc_vals.str.startswith("V2")).mean() > 0.3
-
-    deslocado = volume_muito_vazio and lote_muito_numerico and desc_parece_lote
-    if deslocado:
-        log("[loader] ⚠️ padrão de deslocamento detectado: VOLUME quase vazio + LOTE numérico + DESC_ITEM parecendo LOTE")
-
-    def _ratio_remessa(col):
-        v = df_raw[col].astype(str).str.strip()
-        return (v.str.fullmatch(r"\d{7,}")).mean()
-
-    if "REMESSA" in df_raw.columns and _ratio_remessa("REMESSA") >= 0.6:
-        remessa_col = "REMESSA"
-        log("[loader] REMESSA escolhida da coluna 'REMESSA' (passou o critério)")
-    else:
-        remessa_col = _pick_best_remessa_col(df_raw)
-        log(f"[loader] REMESSA escolhida por heurística: {remessa_col}")
-
-    candidates_item = [c for c in df_raw.columns if c != remessa_col]
-    if candidates_item:
-        best_item = _pick_best_item_col(df_raw[candidates_item]) if hasattr(pd.DataFrame, "__getitem__") else _pick_best_item_col(df_raw)
-
-        item_col = best_item if best_item != remessa_col else _pick_best_item_col(df_raw)
-    else:
-        item_col = _pick_best_item_col(df_raw)
-
-    if not col_chave:
-        scores = []
-        for c in df_raw.columns:
-            vals = df_raw[c].astype(str).str.strip()
-            m = vals.str.match(r"^M\d+")
-            scores.append((m.mean(), c))
-        scores.sort(reverse=True)
-        col_chave = scores[0][1]
-    log(f"[loader] CHAVE_PALETE: {col_chave}")
-
-    qty_series = None
-    qty_src = None
-    def _series_all_zero_or_empty(s):
-        ss = s.fillna("").astype(str).str.strip()
-        if (ss == "").mean() > 0.95:
-            return True
-        nums = ss.map(_coerce_num_locale_strict)
-        return (pd.Series(nums).fillna(0.0).abs() < 1e-12).mean() > 0.95
-
-    if col_vol and not _series_all_zero_or_empty(df_raw[col_vol]):
-        qty_series = df_raw[col_vol]
-        qty_src = col_vol
-
-    elif deslocado and lote_col is not None and not _series_all_zero_or_empty(df_raw[lote_col]):
-        qty_series = df_raw[lote_col]
-        qty_src = lote_col + " (ajustado de deslocamento)"
-    else:
-
-        ban = set([remessa_col, item_col, col_chave])
-        best = None
-        best_score = -1
-        for c in df_raw.columns:
-            if c in ban:
-                continue
-            vals = df_raw[c].astype(str).str.strip()
-            nums = pd.to_numeric(vals.str.replace(",", ".", regex=False), errors="coerce")
-            score = nums.notna().mean()
-            if score > best_score:
-                best_score = score
-                best = c
-        qty_series = df_raw[best]
-        qty_src = best + " (fallback numérico)"
-
-    log(f"[loader] QUANTIDADE será lida de: {qty_src}")
-
+    # dataframe padronizado para o simulador
     df = pd.DataFrame({
-        "REMESSA":      df_raw[remessa_col].astype(str).str.strip(),
-        "ITEM":         df_raw[item_col].astype(str).str.strip(),
-        "CHAVE_PALETE": df_raw[col_chave].astype(str).str.strip(),
-        "QUANTIDADE":   qty_series.map(_coerce_num_locale_strict).astype(float).abs()
+        "REMESSA": df_raw[col_remessa].astype(str).str.strip(),
+        "ITEM": df_raw[col_item].astype(str).str.strip(),
+        "COD_RASTREABILIDADE": df_raw[col_chave].astype(str).str.strip(),
+        "QUANTIDADE": pd.to_numeric(df_raw[col_vol].astype(str).str.replace(",", ".", regex=False),
+                                    errors="coerce").fillna(0.0)
     })
 
-    if col_tipo in df_raw.columns:
-        tipos = df_raw[col_tipo].astype(str).str.upper().str.contains("CHAVE")
-        if tipos.mean() > 0.05:
-            df = df[tipos.values]
-            log(f"[loader] filtro TIPO_RASTREABILIDADE aplicado (CHAVE) → {len(df)} linhas")
+    # filtros simples
+    df = df[(df["REMESSA"] != "") & (df["ITEM"] != "") & (df["COD_RASTREABILIDADE"] != "")]
+    df = df.reset_index(drop=True)
 
-    df["REMESSA"] = df["REMESSA"].str.replace(r"\.0$", "", regex=True)
-    df = df[(df["REMESSA"] != "") & (df["ITEM"] != "") & (df["CHAVE_PALETE"] != "")]
-    df = df.drop_duplicates(subset=["REMESSA", "ITEM", "CHAVE_PALETE", "QUANTIDADE"], keep="last").reset_index(drop=True)
-
-    log(f"[loader] após seleção de colunas => {df.shape}")
-    log(f"[loader] stats QUANTIDADE -> min={df['QUANTIDADE'].min():.2f} max={df['QUANTIDADE'].max():.2f}")
-    remessas = sorted(df["REMESSA"].unique().tolist())
-    exemplos = remessas[:5]
-    log(f"[loader] CSV carregado: {len(df)} linhas | remessas distintas: {len(remessas)}")
-    log(f"[loader] exemplos de remessas: {exemplos}")
-    log(f"[loader] amostra:\n{df.head(5).to_string(index=False)}")
-
+    log(f"[loader] CSV carregado OK: {df.shape[0]} linhas")
+    log(f"[loader] exemplos de remessas: {df['REMESSA'].unique()[:5]}")
     return df
-
 
 def salvar_em_base_auxiliar(df_remessa, remessa, log_callback, fonte_dir):
     caminho_aux = os.path.join(fonte_dir, "expedicao_edicoes.xlsx")
@@ -315,9 +189,18 @@ def salvar_em_base_auxiliar(df_remessa, remessa, log_callback, fonte_dir):
         else:
             df_existente = pd.DataFrame()
 
+        # normaliza colunas esperadas
+        df_remessa = df_remessa.copy()
+        if "CHAVE_PALETE" not in df_remessa.columns and "COD_RASTREABILIDADE" in df_remessa.columns:
+            df_remessa["CHAVE_PALETE"] = df_remessa["COD_RASTREABILIDADE"]
+        if "COD_RASTREABILIDADE" not in df_remessa.columns and "CHAVE_PALETE" in df_remessa.columns:
+            df_remessa["COD_RASTREABILIDADE"] = df_remessa["CHAVE_PALETE"]
+
         df_remessa["REMESSA"] = df_remessa["REMESSA"].astype(str).str.replace(r"\.0$", "", regex=True)
         df_remessa = df_remessa.dropna(subset=["ITEM"])
         df_remessa = df_remessa[df_remessa["ITEM"] != ""]
+
+        # de-dup pelo que o app manipula
         df_remessa = df_remessa.drop_duplicates(subset=["REMESSA", "ITEM", "CHAVE_PALETE"], keep="last")
 
         df_atualizado = pd.concat([df_existente, df_remessa], ignore_index=True)
@@ -332,6 +215,7 @@ def salvar_em_base_auxiliar(df_remessa, remessa, log_callback, fonte_dir):
     except Exception as e:
         log_callback(f"[ERRO AO SALVAR NA BASE AUXILIAR]: {str(e)}")
         raise
+
 
 def carregar_base_auxiliar(fonte_dir):
     caminho_aux = os.path.join(fonte_dir, "expedicao_edicoes.xlsx")
@@ -369,16 +253,29 @@ def obter_dados_remessa(remessa, df_expedicao, log_callback):
         caminho_aux = os.path.join(BASE_DIR_DOCS, "expedicao_edicoes.xlsx")
         if os.path.exists(caminho_aux):
             df_aux = pd.read_excel(caminho_aux, sheet_name="dado_exp")
-            mask_aux = _match_remessa_series(df_aux['REMESSA'], remessa)
+            # normaliza colunas
+            if "CHAVE_PALETE" not in df_aux.columns and "COD_RASTREABILIDADE" in df_aux.columns:
+                df_aux["CHAVE_PALETE"] = df_aux["COD_RASTREABILIDADE"]
+
+            sr = df_aux['REMESSA'] if 'REMESSA' in df_aux.columns else pd.Series("", index=df_aux.index)
+            mask_aux = _match_remessa_series(sr, remessa)
             df_filtrado_aux = df_aux.loc[mask_aux].copy()
             if not df_filtrado_aux.empty:
                 log_callback(f"Remessa {remessa} encontrada na base auxiliar (edicoes)")
                 return df_filtrado_aux
 
-        mask_ori = _match_remessa_series(df_expedicao['REMESSA'], remessa)
+        # base original
+        sr_rem = df_expedicao['REMESSA'] if 'REMESSA' in df_expedicao.columns else pd.Series([], dtype=str, index=df_expedicao.index)
+        mask_ori = _match_remessa_series(sr_rem, remessa)
+        if not isinstance(mask_ori, pd.Series):
+            raise RuntimeError("match_remessa retornou objeto não-Series")
+
         df_filtrado = df_expedicao.loc[mask_ori].copy()
 
         if not df_filtrado.empty:
+            # garante CHAVE_PALETE
+            if "CHAVE_PALETE" not in df_filtrado.columns and "COD_RASTREABILIDADE" in df_filtrado.columns:
+                df_filtrado["CHAVE_PALETE"] = df_filtrado["COD_RASTREABILIDADE"]
             log_callback(f"Remessa {remessa} encontrada na base original")
             return df_filtrado
 
@@ -388,6 +285,7 @@ def obter_dados_remessa(remessa, df_expedicao, log_callback):
     except Exception as e:
         log_callback(f"Erro ao buscar remessa {remessa}: {str(e)}")
         return pd.DataFrame()
+
 
 def criar_copia_planilha(fonte_dir, nome_arquivo, log_callback):
     try:
@@ -476,74 +374,201 @@ def exportar_pdf_com_comtypes(path_xlsx, aba_nome="FORMULARIO", nome_remessa="RE
             log_callback(f"Erro ao exportar PDF: {e}")
         raise
 
-def calculo_sobrepeso_fixo(sku, df_base_fisica, peso_base_liq, log_callback):
+def _norm_colname(name: str) -> str:
+    """minúsculas, sem acento, só letras/dígitos/_"""
+    s = unicodedata.normalize("NFKD", str(name))
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))
+    s = re.sub(r"[^a-zA-Z0-9]+", "_", s).strip("_").lower()
+    return s
+
+def _pick_col_flex(df: pd.DataFrame, candidatos) -> str | None:
+    norm_map = {_norm_colname(c): c for c in df.columns}
+    for cand in candidatos:
+        key = _norm_colname(cand)
+        if key in norm_map:
+            return norm_map[key]
+    # tenta por “contém”
+    want = {_norm_colname(c) for c in candidatos}
+    for col in df.columns:
+        n = _norm_colname(col)
+        if any(w in n for w in want):
+            return col
+    return None
+def carregar_base_fisica(base_dir_docs: str, log=print):
+    """
+    Lê SIMULADOR_BALANÇA_LIMPO_2.xlsx e devolve (df_base_fisica, df_base_familia),
+    com logs de colunas e amostras para depuração.
+    """
+    path = os.path.join(base_dir_docs, "SIMULADOR_BALANÇA_LIMPO_2.xlsx")
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Arquivo não encontrado: {path}")
+
     try:
-        sp_row = df_base_fisica[df_base_fisica["CÓDIGO PRODUTO"] == sku]
-        if not sp_row.empty:
-            sp_fixo = pd.to_numeric(sp_row.iloc[0]["SOBRE PESO"], errors="coerce") / 100
-            peso_base_liq = pd.to_numeric(peso_base_liq, errors="coerce")
-
-            if isinstance(peso_base_liq, pd.Series):
-                peso_base_liq = peso_base_liq.iloc[0]
-
-            ajuste = float(peso_base_liq) * float(sp_fixo) if pd.notna(peso_base_liq) and pd.notna(sp_fixo) else 0.0
-            return sp_fixo, ajuste
-        else:
-            log_callback(f"Nenhum sobrepeso fixo encontrado para SKU {sku}.")
-            return 0.0, 0.0
+        df_bf  = pd.read_excel(path, sheet_name="BASE FISICA")
+        df_fam = pd.read_excel(path, sheet_name="BASE_FAMILIA")
     except Exception as e:
-        log_callback(f"Erro ao buscar sobrepeso fixo para SKU {sku}: {e}")
+        log(f"[BASE_FISICA][erro] Falha ao ler planilha: {e!r}")
+        raise
+
+    # Logs básicos
+    log(f"[BASE_FISICA] caminho: {path}")
+    log(f"[BASE_FISICA] linhas: {len(df_bf)} | colunas: {list(df_bf.columns)}")
+
+    col_sku = _pick_col_flex(df_bf, ["CÓDIGO PRODUTO","CODIGO_PRODUTO","COD_PRODUTO","CÓD_PRODUTO"])
+    col_sp  = _pick_col_flex(df_bf, ["SOBRE PESO","SOBREPESO","SOBRE_PESO","SOBRE PESO (%)","SOBREPESO_%","SOBRE_PESO_FIXO"])
+
+    log(f"[BASE_FISICA] coluna SKU detectada: {col_sku!r} | coluna SP detectada: {col_sp!r}")
+
+    # Mostrar 5 primeiras linhas úteis
+    try:
+        prev = (df_bf[[c for c in [col_sku, col_sp] if c]]
+                .head(5)
+                .to_dict(orient="records"))
+        log(f"[BASE_FISICA] amostra: {prev}")
+    except Exception:
+        pass
+
+    # Pequena limpeza de espaços
+    if col_sku:
+        df_bf[col_sku] = df_bf[col_sku].astype(str).str.strip()
+    if col_sp:
+        df_bf[col_sp]  = df_bf[col_sp].astype(str).str.strip()
+
+    return df_bf, df_fam
+
+
+def _norm_sku(s) -> str:
+    return re.sub(r"\D", "", str(s).strip())
+
+def _to_frac(x) -> float:
+    if pd.isna(x):
+        return 0.0
+    s = str(x).strip().replace(",", ".").replace("%", "")
+    try:
+        v = float(s)
+    except ValueError:
+        return 0.0
+    return v/100.0 if v > 1.0 else v
+
+
+def calculo_sobrepeso_fixo(sku, df_base_fisica, df_sku, peso_base_liq, log_callback):
+    try:
+        sku_norm = _norm_sku(sku)
+        pb = converter_para_float_seguro(peso_base_liq)
+        col_sku = _pick_col_flex(df_sku, ["COD_PRODUTO","CODIGO_PRODUTO","CÓDIGO PRODUTO","CÓD_PRODUTO","COD_PROD"])
+        col_sp  = _pick_col_flex(df_sku, ["SOBRE PESO","SOBREPESO","SOBRE_PESO","SOBRE PESO (%)","SOBREPESO_%","SOBRE_PESO_FIXO"])
+        if col_sku and col_sp:
+            serie_cod_norm = (
+                df_sku[col_sku]
+                .astype(str)
+                .str.replace(r"\D", "", regex=True)
+            )
+            mask = (serie_cod_norm == sku_norm)
+            hit = df_sku.loc[mask]
+            log_callback(f"[fixo/dado_sku] cols: sku='{col_sku}', sp='{col_sp}' | match={int(mask.sum())}")
+            if not hit.empty:
+                try:
+                    log_callback(f"[fixo/dado_sku] exemplo: {hit.head(1).to_dict(orient='records')[0]}")
+                except Exception:
+                    pass
+
+                sp_raw = hit.iloc[0][col_sp]
+                sp = _to_frac(sp_raw)
+                aj = pb * sp if sp != 0 else 0.0
+                log_callback(f"[fixo/dado_sku] SKU {sku} → sp={sp:.4f} | ajuste≈{aj:.2f} kg (pb={pb:.2f})")
+                return float(sp), float(aj)
+
+        col_sku2 = _pick_col_flex(df_base_fisica, ["CÓDIGO PRODUTO","CODIGO_PRODUTO","COD_PRODUTO","CÓD_PRODUTO"])
+        col_sp2  = _pick_col_flex(df_base_fisica, ["SOBRE PESO","SOBREPESO","SOBRE_PESO","SOBRE PESO (%)","SOBREPESO_%","SOBRE_PESO_FIXO"])
+        log_callback(f"[fixo/base_fisica] cols: sku='{col_sku2}', sp='{col_sp2}'")
+
+        if col_sku2 and col_sp2:
+            serie_cod_norm2 = (
+                df_base_fisica[col_sku2]
+                .astype(str)
+                .str.replace(r"\D", "", regex=True)
+            )
+            mask2 = (serie_cod_norm2 == sku_norm)
+            hit2 = df_base_fisica.loc[mask2]
+            log_callback(f"[fixo/base_fisica] match={int(mask2.sum())}")
+
+            if not hit2.empty:
+                try:
+                    log_callback(f"[fixo/base_fisica] exemplo: {hit2.head(1).to_dict(orient='records')[0]}")
+                except Exception:
+                    pass
+
+                sp_raw2 = hit2.iloc[0][col_sp2]
+                sp2 = _to_frac(sp_raw2)
+                aj2 = pb * sp2 if sp2 != 0 else 0.0
+                log_callback(f"[fixo/base_fisica] SKU {sku} → sp={sp2:.4f} | ajuste≈{aj2:.2f} kg (pb={pb:.2f})")
+                return float(sp2), float(aj2)
+
+        log_callback(f"[fixo] SKU {sku} sem cadastro (dado_sku e base_fisica).")
         return 0.0, 0.0
 
-def processar_sobrepeso(chave_pallet, sku, peso_base_liq, df_sap, df_sobrepeso_real, df_base_fisica, log_callback):
+    except Exception as e:
+        # Mostra o tipo e a mensagem da exceção para depuração clara
+        log_callback(f"[fixo][erro] SKU {sku}: {type(e).__name__}: {e}")
+        return 0.0, 0.0
+
+
+
+def processar_sobrepeso(chave_pallet, sku, peso_base_liq, df_sap, df_sobrepeso_real, df_base_fisica, df_sku, log_callback):
     peso_base_liq = converter_para_float_seguro(peso_base_liq)
     sp = 0.0
     origem_sp = "não encontrado"
     ajuste_sp = 0.0
 
-    if pd.notna(chave_pallet) and chave_pallet in df_sap["Chave Pallet"].values:
-        pallet_info = df_sap[df_sap["Chave Pallet"] == chave_pallet].iloc[0]
-        lote = pallet_info["Lote"]
-        data_producao = pallet_info["Data de produção"]
-        hora_inicio = f"{pallet_info['Hora de criação'].hour:02d}:00:00"
-        hora_fim = f"{pallet_info['Hora de modificação'].hour:02d}:00:00"
-        linha_coluna = "L" + str(lote)[-3:]
-        if linha_coluna in ["LB06", "LB07"]:
-            linha_coluna = "LB06/07"
+    log_callback(f"[item] sku={sku} | chave={chave_pallet} | peso_liq≈{peso_base_liq:.2f} kg")
 
-        df_sp_filtro = df_sobrepeso_real[
-            (df_sobrepeso_real["DataHora"] >= pd.to_datetime(f"{data_producao} {hora_inicio}")) &
-            (df_sobrepeso_real["DataHora"] <= pd.to_datetime(f"{data_producao} {hora_fim}"))
-        ]
+    sap_col = "Chave Pallet" if "Chave Pallet" in df_sap.columns else ("CHAVE_PALETE" if "CHAVE_PALETE" in df_sap.columns else None)
+    if sap_col and pd.notna(chave_pallet) and chave_pallet in df_sap[sap_col].values:
+        pallet_info = df_sap[df_sap[sap_col] == chave_pallet].iloc[0]
+        try:
+            lote = pallet_info.get("Lote", "")
+            data_producao = pallet_info["Data de produção"]
+            hora_inicio = f"{pallet_info['Hora de criação'].hour:02d}:00:00"
+            hora_fim    = f"{pallet_info['Hora de modificação'].hour:02d}:00:00"
+            linha_coluna = "L" + str(lote)[-3:]
+            if linha_coluna in ["LB06", "LB07"]:
+                linha_coluna = "LB06/07"
 
-        if linha_coluna in df_sp_filtro.columns:
-            sp_valores = df_sp_filtro[linha_coluna].fillna(0)
-            if not sp_valores.empty:
+            df_sp_filtro = df_sobrepeso_real[
+                (df_sobrepeso_real["DataHora"] >= pd.to_datetime(f"{data_producao} {hora_inicio}")) &
+                (df_sobrepeso_real["DataHora"] <= pd.to_datetime(f"{data_producao} {hora_fim}"))
+            ]
+
+            if linha_coluna in df_sp_filtro.columns:
+                sp_valores = df_sp_filtro[linha_coluna].astype(float).fillna(0)
                 media_sp = sp_valores.mean() / 100
-                peso_base_liq = pd.to_numeric(peso_base_liq, errors="coerce")
-                sp = pd.to_numeric(media_sp, errors="coerce")
 
-                if isinstance(peso_base_liq, pd.Series):
-                    peso_base_liq = peso_base_liq.iloc[0]
-                if isinstance(sp, pd.Series):
-                    sp = sp.iloc[0]
-
-                if pd.notna(peso_base_liq) and pd.notna(sp) and float(sp) > 0:
-                    ajuste_sp = float(peso_base_liq) * float(sp)
+                if media_sp > 0:
+                    sp = float(media_sp)
                     origem_sp = "real"
+                    ajuste_sp = peso_base_liq * sp
+                    log_callback(f"[real] linha={linha_coluna} janela={hora_inicio}-{hora_fim} sp={sp:.4f} ajuste≈{ajuste_sp:.2f} kg")
                 else:
-                    sp = 0.0
-                    ajuste_sp = 0.0
-                    origem_sp = "fixo"
+                    log_callback(f"[real] média<=0 para {linha_coluna} | usando fixo…")
+            else:
+                log_callback(f"[real] coluna {linha_coluna} não existe em sobrepeso_real | usando fixo…")
+        except Exception as e:
+            log_callback(f"[real][erro] sku={sku} chave={chave_pallet} -> {e}")
 
     if sp == 0:
-        sp_valor, ajuste_fixo = calculo_sobrepeso_fixo(sku, df_base_fisica, peso_base_liq, log_callback)
-        if sp_valor != 0:
+        sp_valor, ajuste_fixo = calculo_sobrepeso_fixo(sku, df_base_fisica, df_sku, peso_base_liq, log_callback)
+        if sp_valor > 0:
             sp = sp_valor
             origem_sp = "fixo"
             ajuste_sp = ajuste_fixo
+            log_callback(f"[fixo] adotado sp={sp:.4f} ajuste≈{ajuste_sp:.2f} kg")
         else:
-            log_callback(f"Nenhum sobrepeso encontrado para SKU {sku}.")
+            log_callback(f"[sp] não encontrado (real/fixo).")
+
+    if sp <= 0 and origem_sp != "fixo":
+        sp = 0.0
+        origem_sp = "não encontrado"
+        ajuste_sp = 0.0
 
     return sp, origem_sp, ajuste_sp
 
@@ -570,25 +595,56 @@ def calcular_peso_final(
     df_remessa = df_remessa.copy()
     df_remessa["QUANTIDADE"] = df_remessa["QUANTIDADE"].apply(converter_para_float_seguro)
     df_remessa = df_remessa.drop_duplicates(subset=["ITEM", "QUANTIDADE", "CHAVE_PALETE"], keep="last")
-    log_callback(f"Linhas da remessa após dedup: {len(df_remessa)}")
+    log_callback(f"[remessa] {remessa_num} | linhas após dedup: {len(df_remessa)}")
 
     peso_base_total_bruto = 0.0
     peso_base_total_liq = 0.0
     sp_total = 0.0
     itens_detalhados = []
 
-    for _, row in df_remessa.iterrows():
+    for i, (_, row) in enumerate(df_remessa.iterrows(), start=1):
         sku = str(row["ITEM"]).strip()
         qtd = converter_para_float_seguro(row["QUANTIDADE"])
         chave = str(row["CHAVE_PALETE"]).strip()
 
         if not sku or qtd <= 0:
+            log_callback(f"[linha {i}] ignorada (sku vazio ou qtd<=0): sku='{sku}' qtd={qtd}")
             continue
 
-        df_sku_filtrado = df_sku[df_sku["COD_PRODUTO"].astype(str) == sku]
-        if df_sku_filtrado.empty:
-            log_callback(f"SKU {sku} não encontrado na base SKU.")
+        sku_norm = _norm_sku(str(sku))
+        log_callback(f"[fixo][procura] SKU alvo: {sku} (norm={sku_norm})")
+        col_cod = _pick_col_flex(
+            df_sku,
+            ["COD_PRODUTO","CODIGO_PRODUTO","CÓDIGO PRODUTO","CÓD_PRODUTO","COD_PROD"]
+        )
+        if not col_cod:
+            log_callback(f"[linha {i}] Coluna de código de produto não encontrada em df_sku.")
             continue
+
+        # --- normalizar a coluna e o SKU alvo ---
+        serie_cod_norm = (
+            df_sku[col_cod]
+            .astype(str)
+            .str.replace(r"\D", "", regex=True)
+        )
+
+        sku_norm = _norm_sku(sku)
+
+        # --- aplicar filtro ---
+        mask = serie_cod_norm == sku_norm
+        df_sku_filtrado = df_sku[mask]
+
+        # --- logs para depuração ---
+        log_callback(f"[linha {i}] SKU alvo: {sku} (norm: {sku_norm}) "
+                    f"– encontrados: {mask.sum()} linhas em df_sku.")
+
+        if not df_sku_filtrado.empty:
+            exemplo = df_sku_filtrado.head(1).to_dict(orient="records")[0]
+            log_callback(f"[linha {i}] Exemplo da linha encontrada em df_sku: {exemplo}")
+        else:
+            # mostra os primeiros 5 valores norm já normalizados pra comparar
+            exemplos_cod = serie_cod_norm.head(5).tolist()
+            log_callback(f"[linha {i}] Nenhum match. Exemplos normalizados em df_sku: {exemplos_cod}")
 
         p_bruto = converter_para_float_seguro(df_sku_filtrado.iloc[0]["QTDE_PESO_BRU"])
         p_liq   = converter_para_float_seguro(df_sku_filtrado.iloc[0]["QTDE_PESO_LIQ"])
@@ -596,13 +652,17 @@ def calcular_peso_final(
         peso_bruto = p_bruto * qtd if p_bruto > 0 else 0.0
         peso_liq   = p_liq   * qtd if p_liq   > 0 else 0.0
 
-        peso_base_total_bruto += peso_bruto
-        peso_base_total_liq   += peso_liq
+        log_callback(f"[linha {i}] sku={sku} qtd={qtd} chave={chave} | unit(bruto={p_bruto}, liq={p_liq}) | base(bruto≈{peso_bruto:.2f}, liq≈{peso_liq:.2f})")
 
         sp, origem_sp, ajuste_sp = processar_sobrepeso(
-            chave, sku, peso_liq, df_sap, df_sobrepeso_real, df_base_fisica, log_callback
+            chave, sku, peso_liq, df_sap, df_sobrepeso_real, df_base_fisica, df_sku, log_callback
         )
+
+        peso_base_total_bruto += peso_bruto
+        peso_base_total_liq   += peso_liq
         sp_total += ajuste_sp
+
+        log_callback(f"[linha {i}] SP={sp:.4f} ({origem_sp}) | ajuste≈{ajuste_sp:.2f} kg | acumulados: base_bruto≈{peso_base_total_bruto:.2f} kg, SP≈{sp_total:.2f} kg")
 
         itens_detalhados.append({
             "sku": sku,
@@ -613,14 +673,13 @@ def calcular_peso_final(
         })
 
     peso_com_sobrepeso = peso_base_total_bruto + sp_total
-    log_callback(f"Peso base (bruto): {peso_base_total_bruto:.2f} kg | SP total: {sp_total:.2f} kg")
-    log_callback(f"Peso com sobrepeso: {peso_com_sobrepeso:.2f} kg")
+    log_callback(f"[total] base_bruto≈{peso_base_total_bruto:.2f} kg | SP≈{sp_total:.2f} kg | com_SP≈{peso_com_sobrepeso:.2f} kg")
 
     peso_total_com_paletes = peso_com_sobrepeso + (qtd_paletes * 22.0) + peso_veiculo_vazio
-    log_callback(f"Peso total (paletes + veículo): {peso_total_com_paletes:.2f} kg")
+    log_callback(f"[total] +paletes({qtd_paletes}×22) +veículo({peso_veiculo_vazio}) => final≈{peso_total_com_paletes:.2f} kg")
 
     media_sp_geral = (sum(item["sp"] for item in itens_detalhados) / len(itens_detalhados)) if itens_detalhados else 0.0
-    log_callback(f"Média geral de sobrepeso (entre {len(itens_detalhados)} itens): {media_sp_geral:.4f}")
+    log_callback(f"[total] média(sp)={media_sp_geral:.4f} em {len(itens_detalhados)} itens")
 
     return (
         peso_base_total_bruto,
@@ -630,6 +689,7 @@ def calcular_peso_final(
         media_sp_geral,
         itens_detalhados
     )
+
 
 def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_familia, df_sobrepeso_tabela, df_sku, df_remessa, df_fracao, log_callback):
     total_quantidade = 0
@@ -882,6 +942,10 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
         self.fonte_dir = BASE_DIR_AUD
         self.remessa_editada = False
         self.df_expedicao_original = df_expedicao.dropna(subset=["ITEM"]).copy()
+        # garante alias
+        if "CHAVE_PALETE" not in self.df_expedicao_original.columns and "COD_RASTREABILIDADE" in self.df_expedicao_original.columns:
+            self.df_expedicao_original["CHAVE_PALETE"] = self.df_expedicao_original["COD_RASTREABILIDADE"]
+
         self.df_expedicao_original["REMESSA"] = (
             self.df_expedicao_original["REMESSA"].astype(str)
             .str.strip()
@@ -1330,8 +1394,13 @@ class App(ctk.CTk):
         self.add_log(mensagem)
 
     def log_callback_tecnico(self, mensagem):
+        # mantém histórico técnico E também joga na área de logs visível
         timestamp = datetime.now().strftime("%H:%M:%S")
-        self.log_tecnico.append(f"[{timestamp}] {mensagem}")
+        txt = f"[{timestamp}] {mensagem}"
+        self.log_tecnico.append(txt)
+        # espelha no display
+        self.add_log(mensagem)
+
 
     def iniciar_processamento(self):
         self.progress_bar.pack()
@@ -1352,8 +1421,16 @@ class App(ctk.CTk):
             path_base_sap       = os.path.join(BASE_DIR_DOCS, "base_sap.xlsx")
             file_path = criar_copia_planilha(BASE_DIR_DOCS, "SIMULADOR_BALANÇA_LIMPO_2.xlsx", self.add_log)
 
+            # 4.a) Carrega BASE FISICA + BASE_FAMILIA com logs
+            df_base_fisica, df_base_familia_local = carregar_base_fisica(BASE_DIR_DOCS, log=self.add_log)
+
+            # Mantém df_base_familia acessível para as funções que a usam como global
+            global df_base_familia
+            df_base_familia = df_base_familia_local
+
             with pd.ExcelFile(file_path) as xl:
                 df_sku = xl.parse("dado_sku")
+
 
             df_expedicao = carregar_base_expedicao_csv(BASE_DIR_AUD, log=self.add_log)
             df_sap = pd.read_excel(path_base_sap, sheet_name="Sheet1")
@@ -1369,29 +1446,24 @@ class App(ctk.CTk):
 
             self.progress_bar.set(0.5)
 
+            # em App.processar, troque:
             resultado = calcular_peso_final(
-                remessa,
-                peso_vazio,
-                qtd_paletes,
-                df_remessa,
-                df_sku,
-                df_sap,
-                df_sobrepeso_real,
-                df_base_fisica,
-                self.log_callback_tecnico
+                remessa, peso_vazio, qtd_paletes,
+                df_remessa, df_sku, df_sap, df_sobrepeso_real, df_base_fisica,
+                self.log_callback_completo,   
             )
+
             if not resultado:
                 self.log_callback_completo("Falha no cálculo. Verifique os dados inseridos.")
                 messagebox.showwarning("Aviso", "Cálculo não pôde ser realizado.")
                 return
 
             peso_base, sp_total, peso_com_sp, peso_final, media_sp, itens_detalhados = resultado
-
+            mask_qtd = _match_remessa_series(df_expedicao['REMESSA'], remessa)
+            
             dados = {
                 'remessa': remessa,
-                'qtd_skus': df_expedicao[df_expedicao['REMESSA'].astype(str)
-                                        .str.replace(r'\.0$', '', regex=True)
-                                        .str.strip() == str(remessa)]['ITEM'].nunique(),
+                'qtd_skus': df_expedicao.loc[mask_qtd, 'ITEM'].nunique(),
                 'placa': self.placa.get(),
                 'turno': self.turno.get(),
                 'peso_vazio': peso_vazio,
@@ -1465,8 +1537,11 @@ class App(ctk.CTk):
             )
 
         except Exception as e:
-            self.log_callback_completo(f"Erro: {str(e)}")
-            messagebox.showerror("Erro", f"Erro ao processar: {str(e)}")
+            tb = traceback.format_exc()
+            self.log_callback_completo(f"Erro: {e!r}")
+            self.log_callback_completo(tb)
+            messagebox.showerror("Erro", f"Erro ao processar: {e!r}")
+
 
 
 if __name__ == "__main__":
