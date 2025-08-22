@@ -440,57 +440,97 @@ def _to_frac(x) -> float:
 def calculo_sobrepeso_fixo(sku, df_base_fisica, df_sku, peso_base_liq, log_callback):
     try:
         sku_norm = _norm_sku(sku)
-        pb = converter_para_float_seguro(peso_base_liq)
-        col_sku = _pick_col_flex(df_sku, ["COD_PRODUTO","CODIGO_PRODUTO","CÓDIGO PRODUTO","CÓD_PRODUTO","COD_PROD"])
-        col_sp  = _pick_col_flex(df_sku, ["SOBRE PESO","SOBREPESO","SOBRE_PESO","SOBRE PESO (%)","SOBREPESO_%","SOBRE_PESO_FIXO"])
-        if col_sku and col_sp:
-            serie_cod_norm = (
-                df_sku[col_sku]
-                .astype(str)
-                .str.replace(r"\D", "", regex=True)
-            )
-            mask = (serie_cod_norm == sku_norm)
-            hit = df_sku.loc[mask]
-            log_callback(f"[fixo/dado_sku] cols: sku='{col_sku}', sp='{col_sp}' | match={int(mask.sum())}")
-            if not hit.empty:
-                try:
-                    log_callback(f"[fixo/dado_sku] exemplo: {hit.head(1).to_dict(orient='records')[0]}")
-                except Exception:
-                    pass
+        pb = converter_para_float_seguro(peso_base_liq) or 0.0
 
-                sp_raw = hit.iloc[0][col_sp]
-                sp = _to_frac(sp_raw)
-                aj = pb * sp if sp != 0 else 0.0
-                log_callback(f"[fixo/dado_sku] SKU {sku} → sp={sp:.4f} | ajuste≈{aj:.2f} kg (pb={pb:.2f})")
-                return float(sp), float(aj)
+        # Utilitários de coluna
+        cols_sku = ["COD_PRODUTO","CODIGO_PRODUTO","CÓDIGO PRODUTO","CÓD_PRODUTO","COD_PROD"]
+        cols_sp_kg = ["SOBRE PESO","SOBREPESO","SOBRE_PESO","SOBRE PESO (KG)","SOBREPESO_KG","SOBRE_PESO_FIXO"]
+        cols_sp_perc = ["DIF (%)","DIF%","DIF_PERC","SOBRE PESO (%)","SOBREPESO_%"]
+        cols_media = ["MEDIA","MÉDIA"]
+        cols_peso_sap = ["PESO SAP","PESO_SAP","PESO_SAP_KG","PESO SAP (KG)"]
 
-        col_sku2 = _pick_col_flex(df_base_fisica, ["CÓDIGO PRODUTO","CODIGO_PRODUTO","COD_PRODUTO","CÓD_PRODUTO"])
-        col_sp2  = _pick_col_flex(df_base_fisica, ["SOBRE PESO","SOBREPESO","SOBRE_PESO","SOBRE PESO (%)","SOBREPESO_%","SOBRE_PESO_FIXO"])
-        log_callback(f"[fixo/base_fisica] cols: sku='{col_sku2}', sp='{col_sp2}'")
+        def _match_df(df):
+            if df is None or df.empty:
+                return None
+            col_sku = _pick_col_flex(df, cols_sku)
+            if not col_sku:
+                return None
+            serie_cod_norm = df[col_sku].astype(str).str.replace(r"\D", "", regex=True)
+            hit = df.loc[serie_cod_norm == sku_norm]
+            return hit if not hit.empty else None
 
-        if col_sku2 and col_sp2:
-            serie_cod_norm2 = (
-                df_base_fisica[col_sku2]
-                .astype(str)
-                .str.replace(r"\D", "", regex=True)
-            )
-            mask2 = (serie_cod_norm2 == sku_norm)
-            hit2 = df_base_fisica.loc[mask2]
-            log_callback(f"[fixo/base_fisica] match={int(mask2.sum())}")
+        def _read_sp_kg(row):
+            col = _pick_col_flex(row, cols_sp_kg)
+            if not col:
+                return None
+            v = converter_para_float_seguro(row.iloc[0][col])
+            return v if v is not None else None  # já em kg
 
-            if not hit2.empty:
-                try:
-                    log_callback(f"[fixo/base_fisica] exemplo: {hit2.head(1).to_dict(orient='records')[0]}")
-                except Exception:
-                    pass
+        def _read_sp_perc(row):
+            col = _pick_col_flex(row, cols_sp_perc)
+            if not col:
+                return None
+            raw = row.iloc[0][col]
+            # aceita "6", "6%", "0,06", "0.06"
+            frac = _to_frac(raw)  # sua função: 6 -> 0.06 ; "0,06" -> 0.06 ; "6%" -> 0.06
+            return frac if frac is not None else None
 
-                sp_raw2 = hit2.iloc[0][col_sp2]
-                sp2 = _to_frac(sp_raw2)
-                aj2 = pb * sp2 if sp2 != 0 else 0.0
-                log_callback(f"[fixo/base_fisica] SKU {sku} → sp={sp2:.4f} | ajuste≈{aj2:.2f} kg (pb={pb:.2f})")
-                return float(sp2), float(aj2)
+        def _read_media_peso_sap(row):
+            cmed = _pick_col_flex(row, cols_media)
+            csap = _pick_col_flex(row, cols_peso_sap)
+            if not (cmed and csap):
+                return None, None
+            med = converter_para_float_seguro(row.iloc[0][cmed])
+            sap = converter_para_float_seguro(row.iloc[0][csap])
+            return med, sap
 
-        log_callback(f"[fixo] SKU {sku} sem cadastro (dado_sku e base_fisica).")
+        # Busca primeiro em df_sku, depois em df_base_fisica
+        for origem, df in (("dado_sku", df_sku), ("base_fisica", df_base_fisica)):
+            hit = _match_df(df)
+            log_callback(f"[fixo/{origem}] match={'1' if hit is not None else '0'}")
+            if hit is None:
+                continue
+
+            # 1) Tenta SOBRE PESO (kg)
+            spkg = _read_sp_kg(hit)
+            if spkg is not None:
+                perc = 0.0
+                # se tiver DIF(%), calcula também o percentual
+                p = _read_sp_perc(hit)
+                if p is not None:
+                    perc = float(p)
+                elif pb and pb > 0:
+                    # fallback: tenta usar PESO SAP para inferir % com mais precisão
+                    med, sap = _read_media_peso_sap(hit)
+                    base_ref = sap if sap and sap > 0 else pb
+                    perc = float(max(0.0, (spkg / base_ref))) if base_ref else 0.0
+                log_callback(f"[fixo/{origem}] SKU {sku} → SOBRE PESO (kg)={spkg:.3f} | perc≈{perc:.4%}")
+                return float(perc), float(spkg)
+
+            # 2) Tenta DIF (%) como fração
+            p = _read_sp_perc(hit)
+            if p is not None:
+                perc = float(p)
+                ajuste = float((pb or 0.0) * perc)
+                # se houver MÉDIA e PESO SAP, preferir ajuste a partir deles (mais exato que pb)
+                med, sap = _read_media_peso_sap(hit)
+                if med is not None and sap is not None:
+                    ajuste = max(0.0, float(med - sap))
+                    # recalcula % real com base no SAP
+                    if sap and sap > 0:
+                        perc = ajuste / float(sap)
+                log_callback(f"[fixo/{origem}] SKU {sku} → perc={perc:.4%} | ajuste≈{ajuste:.3f} kg (pb={pb:.3f})")
+                return float(perc), float(ajuste)
+
+            # 3) Tenta derivar de MÉDIA e PESO SAP
+            med, sap = _read_media_peso_sap(hit)
+            if med is not None and sap is not None:
+                ajuste = max(0.0, float(med - sap))
+                perc = (ajuste / float(sap)) if sap and sap > 0 else 0.0
+                log_callback(f"[fixo/{origem}] SKU {sku} → med={med} sap={sap} -> ajuste={ajuste:.3f} kg | perc={perc:.4%}")
+                return float(perc), float(ajuste)
+
+        log_callback(f"[fixo] SKU {sku} sem cadastro (dado_sku/base_fisica).")
         return 0.0, 0.0
 
     except Exception as e:
@@ -499,63 +539,80 @@ def calculo_sobrepeso_fixo(sku, df_base_fisica, df_sku, peso_base_liq, log_callb
 
 
 
-def processar_sobrepeso(chave_pallet, sku, peso_base_liq, df_sap, df_sobrepeso_real, df_base_fisica, df_sku, log_callback):
+def processar_sobrepeso(chave_pallet, sku, peso_base_liq, 
+                        df_sap, df_sobrepeso_real, df_base_fisica, df_sku, log_callback):
     peso_base_liq = converter_para_float_seguro(peso_base_liq)
-    sp = 0.0
+    sp = 0.0                  
     origem_sp = "não encontrado"
-    ajuste_sp = 0.0
+    ajuste_sp = 0.0            
 
     log_callback(f"[item] sku={sku} | chave={chave_pallet} | peso_liq≈{peso_base_liq:.2f} kg")
 
     sap_col = "Chave Pallet" if "Chave Pallet" in df_sap.columns else ("CHAVE_PALETE" if "CHAVE_PALETE" in df_sap.columns else None)
-    if sap_col and pd.notna(chave_pallet) and chave_pallet in df_sap[sap_col].values:
-        pallet_info = df_sap[df_sap[sap_col] == chave_pallet].iloc[0]
+    if sap_col and pd.notna(chave_pallet) and chave_pallet in df_sap.get(sap_col, []):
+        pallet_info = df_sap.loc[df_sap[sap_col] == chave_pallet].iloc[0]
         try:
             lote = pallet_info.get("Lote", "")
             data_producao = pallet_info["Data de produção"]
-            hora_inicio = f"{pallet_info['Hora de criação'].hour:02d}:00:00"
-            hora_fim    = f"{pallet_info['Hora de modificação'].hour:02d}:00:00"
+
+            h_ini = getattr(pallet_info["Hora de criação"], "hour", 0)
+            h_fim = getattr(pallet_info["Hora de modificação"], "hour", h_ini)
+            hora_inicio = f"{int(h_ini):02d}:00:00"
+            hora_fim    = f"{int(h_fim):02d}:59:59"
+
             linha_coluna = "L" + str(lote)[-3:]
             if linha_coluna in ["LB06", "LB07"]:
                 linha_coluna = "LB06/07"
 
+            dt_ini = pd.to_datetime(f"{data_producao} {hora_inicio}")
+            dt_fim = pd.to_datetime(f"{data_producao} {hora_fim}")
+
             df_sp_filtro = df_sobrepeso_real[
-                (df_sobrepeso_real["DataHora"] >= pd.to_datetime(f"{data_producao} {hora_inicio}")) &
-                (df_sobrepeso_real["DataHora"] <= pd.to_datetime(f"{data_producao} {hora_fim}"))
+                (df_sobrepeso_real["DataHora"] >= dt_ini) &
+                (df_sobrepeso_real["DataHora"] <= dt_fim)
             ]
 
             if linha_coluna in df_sp_filtro.columns:
-                sp_valores = df_sp_filtro[linha_coluna].astype(float).fillna(0)
-                media_sp = sp_valores.mean() / 100
+                sp_vals = pd.to_numeric(df_sp_filtro[linha_coluna], errors="coerce").fillna(0)
+                media_sp = float(sp_vals.mean()) / 100.0  # fração
 
-                if media_sp > 0:
-                    sp = float(media_sp)
+                if media_sp > 0 and peso_base_liq and peso_base_liq > 0:
+                    sp = media_sp
                     origem_sp = "real"
                     ajuste_sp = peso_base_liq * sp
                     log_callback(f"[real] linha={linha_coluna} janela={hora_inicio}-{hora_fim} sp={sp:.4f} ajuste≈{ajuste_sp:.2f} kg")
                 else:
-                    log_callback(f"[real] média<=0 para {linha_coluna} | usando fixo…")
+                    log_callback(f"[real] média<=0 ou peso_base_liq=0 | usando fixo…")
             else:
-                log_callback(f"[real] coluna {linha_coluna} não existe em sobrepeso_real | usando fixo…")
+                log_callback(f"[real] coluna {linha_coluna} não existe | usando fixo…")
+
         except Exception as e:
             log_callback(f"[real][erro] sku={sku} chave={chave_pallet} -> {e}")
 
     if sp == 0:
-        sp_valor, ajuste_fixo = calculo_sobrepeso_fixo(sku, df_base_fisica, df_sku, peso_base_liq, log_callback)
-        if sp_valor > 0:
-            sp = sp_valor
+        sp_frac, ajuste_fixo_kg = calculo_sobrepeso_fixo(sku, df_base_fisica, df_sku, peso_base_liq, log_callback)
+
+        if (sp_frac is None or sp_frac == 0) and ajuste_fixo_kg and peso_base_liq and peso_base_liq > 0:
+            sp_frac = float(ajuste_fixo_kg) / float(peso_base_liq)
+
+        if (sp_frac or 0) > 0 or (ajuste_fixo_kg or 0) > 0:
+            sp = float(sp_frac or 0.0)
             origem_sp = "fixo"
-            ajuste_sp = ajuste_fixo
+            ajuste_sp = float(ajuste_fixo_kg or 0.0)
+            if sp == 0 and peso_base_liq and peso_base_liq > 0:
+                sp = ajuste_sp / float(peso_base_liq)
+            if ajuste_sp == 0 and peso_base_liq and sp > 0:
+                ajuste_sp = float(peso_base_liq) * float(sp)
+
             log_callback(f"[fixo] adotado sp={sp:.4f} ajuste≈{ajuste_sp:.2f} kg")
         else:
             log_callback(f"[sp] não encontrado (real/fixo).")
 
     if sp <= 0 and origem_sp != "fixo":
-        sp = 0.0
-        origem_sp = "não encontrado"
-        ajuste_sp = 0.0
+        sp, origem_sp, ajuste_sp = 0.0, "não encontrado", 0.0
 
-    return sp, origem_sp, ajuste_sp
+    return float(sp), origem_sp, float(ajuste_sp)
+
 
 def calcular_peso_final(
     remessa_num,
@@ -671,34 +728,146 @@ def calcular_peso_final(
         itens_detalhados
     )
 
+def _to_str(x):
+    if pd.isna(x):
+        return ""
+    s = str(x).strip()
+    # remove sufixo .0 típico de float vindo do Excel
+    s = re.sub(r"\.0$", "", s)
+    return s
 
-def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_familia, df_sobrepeso_tabela, df_sku, df_remessa, df_fracao, log_callback):
+def _norm_digits(x: str) -> str:
+    """Mantém apenas dígitos. Útil quando SKU vem '001234.0' vs '1234'."""
+    return re.sub(r"\D", "", _to_str(x))
+
+def _pick_family_column(df_base_familia):
+    """
+    Tenta encontrar a coluna de família e a de código em df_base_familia.
+    Retorna (col_cod, col_fam).
+    """
+    cols = {c.upper().strip(): c for c in df_base_familia.columns}
+
+    # candidatos para código do item / SKU
+    cand_cod = ["CÓD", "COD", "CÓDIGO", "CODIGO", "SKU", "ITEM", "CÓD_ITEM", "COD_ITEM"]
+    col_cod = None
+    for k in cand_cod:
+        if k in cols:
+            col_cod = cols[k]; break
+    if col_cod is None:
+        raise ValueError("Não encontrei coluna de código/SKU em df_base_familia.")
+
+    # candidatos para família
+    cand_fam = ["FAMILIA 2", "FAMÍLIA 2", "FAMILIA2", "FAMILIA", "FAMÍLIA", "FAMILIA_2"]
+    col_fam = None
+    for k in cand_fam:
+        if k in cols:
+            col_fam = cols[k]; break
+    if col_fam is None:
+        raise ValueError("Não encontrei coluna de família em df_base_familia (ex.: 'FAMILIA 2').")
+
+    return col_cod, col_fam
+
+def _ensure_df_sobrepeso_index(df_sobrepeso_tabela):
+    """
+    Garante que o df_sobrepeso_tabela pode ser consultado por família.
+    Se o índice não for de família, tenta usar uma coluna 'FAMILIA' (variações).
+    Retorna (df, fonte_do_indice: 'index'|'col').
+    """
+    if df_sobrepeso_tabela.index.name is not None:
+        # já tem índice nomeado — mantemos, mas padronizamos para uppercase/strip no match
+        return df_sobrepeso_tabela, "index"
+    # tenta achar coluna de família
+    fam_cols = [c for c in df_sobrepeso_tabela.columns if str(c).strip().upper() in ("FAMILIA", "FAMÍLIA", "FAMILY", "GRUPO")]
+    if fam_cols:
+        col = fam_cols[0]
+        df = df_sobrepeso_tabela.copy()
+        df["_FAM_TMP_KEY_"] = df[col].astype(str).str.upper().str.strip()
+        df = df.set_index("_FAM_TMP_KEY_", drop=True)
+        return df, "col"
+    # se nada encontrado, usamos o índice como está (e logamos depois)
+    return df_sobrepeso_tabela, "index"
+
+def _coerce_float(x, default=0.0):
+    try:
+        if isinstance(x, str):
+            x = x.replace(",", ".")
+        return float(x)
+    except Exception:
+        return default
+
+# --- Função principal com logs detalhados ---
+
+def calcular_limites_sobrepeso_por_quantidade(
+    dados,
+    itens_detalhados,
+    df_base_familia,
+    df_sobrepeso_tabela,
+    df_sku,
+    df_remessa,
+    df_fracao,
+    log_callback
+):
     total_quantidade = 0
     quantidade_com_sp_real = 0
-    ponderador_pos = 0
-    ponderador_neg = 0
+    ponderador_pos = 0.0
+    ponderador_neg = 0.0
     familia_detectada = "MIX"
+
+    # 1) Normalização e diagnóstico da base de família
+    try:
+        col_cod, col_fam = _pick_family_column(df_base_familia)
+    except Exception as e:
+        log_callback(f"[ERRO] Base família sem colunas esperadas: {e}. Forçando MIX.")
+        # fallback hard
+        col_cod, col_fam = None, None
+
+    if col_cod and col_fam:
+        df_fam = df_base_familia[[col_cod, col_fam]].copy()
+        df_fam["_COD_NORM_"] = df_fam[col_cod].map(_norm_digits)
+        df_fam["_FAM_NORM_"] = df_fam[col_fam].astype(str).str.upper().str.strip()
+        # remove vazios óbvios
+        df_fam = df_fam[df_fam["_COD_NORM_"] != ""]
+        log_callback(f"[DEBUG] Base família normalizada: linhas={len(df_fam)}, col_cod='{col_cod}', col_fam='{col_fam}'.")
+    else:
+        df_fam = pd.DataFrame(columns=["_COD_NORM_", "_FAM_NORM_"])
+
+    # 2) Garantir tabela de sobrepeso consultável por família
+    df_sp_tab, sp_index_source = _ensure_df_sobrepeso_index(df_sobrepeso_tabela)
+    debug_index_hint = f"fonte_index='{sp_index_source}', indice_name='{df_sp_tab.index.name}'"
+    log_callback(f"[DEBUG] df_sobrepeso_tabela preparado ({debug_index_hint}), linhas={len(df_sp_tab)}.")
+
+    # 3) Agrupar itens por SKU para ponderações
     agrupado_por_sku = defaultdict(list)
     for item in itens_detalhados:
-        agrupado_por_sku[item["sku"]].append(item)
+        agrupado_por_sku[item.get("sku")] = agrupado_por_sku[item.get("sku")] + [item]
 
+    # 4) Ponderação por quantidade e SP real
     for sku, itens in agrupado_por_sku.items():
-        qtd_total = 0
-        qtd_real = 0
-        ponderador_pos_local = 0
-        ponderador_neg_local = 0
+        qtd_total = 0.0
+        qtd_real = 0.0
+        ponderador_pos_local = 0.0
+        ponderador_neg_local = 0.0
+
         for item in itens:
             origem = item.get("origem", "fixo")
-            sp = item.get("sp", 0)
-            chave = item.get("chave_pallet", "")
-            if not df_fracao.empty and "chave_pallete" in df_fracao.columns and chave in df_fracao["chave_pallete"].values:
-                qtd = pd.to_numeric(df_fracao[df_fracao["chave_pallete"] == chave]["qtd"], errors="coerce").sum()
+            sp = _coerce_float(item.get("sp", 0.0), default=0.0)
+            chave = _to_str(item.get("chave_pallet", ""))
+
+            # quantidade: prioriza df_fracao por chave_pallete
+            if (df_fracao is not None) and (not df_fracao.empty) and ("chave_pallete" in df_fracao.columns):
+                mask_frac = df_fracao["chave_pallete"].astype(str).eq(chave)
+                qtd = pd.to_numeric(df_fracao.loc[mask_frac, "qtd"], errors="coerce").fillna(0).sum()
             else:
-                qtd = pd.to_numeric(df_remessa[df_remessa["ITEM"] == sku]["QUANTIDADE"], errors="coerce").sum()
+                # cai para df_remessa por ITEM == sku
+                if (df_remessa is not None) and (not df_remessa.empty) and ("ITEM" in df_remessa.columns) and ("QUANTIDADE" in df_remessa.columns):
+                    mask_rem = df_remessa["ITEM"].astype(str).map(_norm_digits).eq(_norm_digits(sku))
+                    qtd = pd.to_numeric(df_remessa.loc[mask_rem, "QUANTIDADE"], errors="coerce").fillna(0).sum()
+                else:
+                    qtd = 0.0
 
             qtd_total += qtd
 
-            if origem in ["real"]:
+            if origem == "real":
                 qtd_real += qtd
                 if sp > 0:
                     ponderador_pos_local += sp * qtd
@@ -710,48 +879,110 @@ def calcular_limites_sobrepeso_por_quantidade(dados, itens_detalhados, df_base_f
         ponderador_pos += ponderador_pos_local
         ponderador_neg += ponderador_neg_local
 
-    proporcao_sp_real = quantidade_com_sp_real / total_quantidade if total_quantidade > 0 else 0
-    log_callback(f"Total de quantidade: {total_quantidade}, com SP Real: {quantidade_com_sp_real}, proporção: {proporcao_sp_real:.2%}")
+        log_callback(f"[SKU] sku='{sku}' qtd_total={qtd_total:.3f} qtd_real={qtd_real:.3f} "
+                     f"pond_pos_local={ponderador_pos_local:.3f} pond_neg_local={ponderador_neg_local:.3f}")
 
+    proporcao_sp_real = (quantidade_com_sp_real / total_quantidade) if total_quantidade > 0 else 0.0
+    log_callback(f"[AGREGADO] Total_qtde={total_quantidade:.3f} Qtde_com_SP_Real={quantidade_com_sp_real:.3f} "
+                 f"Proporção_SP_Real={proporcao_sp_real:.2%}")
+
+    # 5) Caminho A: maioria real (>=50%) → médias a partir do realizado
     if proporcao_sp_real >= 0.5:
         if quantidade_com_sp_real > 0:
-            media_positiva = ponderador_pos / quantidade_com_sp_real if ponderador_pos > 0 else 0.02
-            media_negativa = ponderador_neg / quantidade_com_sp_real if ponderador_neg > 0 else 0.01
+            media_positiva = (ponderador_pos / quantidade_com_sp_real) if ponderador_pos > 0 else 0.02
+            media_negativa = (ponderador_neg / quantidade_com_sp_real) if ponderador_neg > 0 else 0.01
         else:
             media_positiva = 0.02
             media_negativa = 0.01
-        log_callback("Mais de 50% da quantidade com SP Real. Usando médias ponderadas.")
-    else:
-        familias = set()
-        for sku in agrupado_por_sku:
-            familia_series = df_base_familia.loc[df_base_familia["CÓD"] == sku, "FAMILIA 2"]
-            if not familia_series.empty:
-                familias.add(str(familia_series.iloc[0]))
+        log_callback("[REGRA] >=50% com SP Real → usando médias ponderadas do realizado.")
+        return media_positiva, media_negativa, proporcao_sp_real, "REAL"
 
-        if len(familias) == 1:
-            familia_str = list(familias)[0].upper()
-            if "BISCOITO" in familia_str:
-                familia_detectada = "BISCOITO"
-                row = df_sobrepeso_tabela.loc[df_sobrepeso_tabela.index.str.contains("BISCOITO", case=False)]
-            elif "MASSA" in familia_str:
-                familia_detectada = "MASSA"
-                row = df_sobrepeso_tabela.loc[df_sobrepeso_tabela.index.str.contains("MASSA", case=False)]
+    # 6) Caminho B: minoria real (<50%) → decidir por família
+    #    Descobrir famílias dos SKUs envolvidos
+    familias = set()
+    if not df_fam.empty:
+        for sku in agrupado_por_sku.keys():
+            sku_norm = _norm_digits(sku)
+            fam_rows = df_fam.loc[df_fam["_COD_NORM_"] == sku_norm, "_FAM_NORM_"]
+            if fam_rows.empty:
+                log_callback(f"[FAM] SKU '{sku}' (norm='{sku_norm}') sem família mapeada na base.")
             else:
-                familia_detectada = "MIX"
-                row = df_sobrepeso_tabela.loc[df_sobrepeso_tabela.index.str.contains("MIX", case=False)]
+                fam_val = str(fam_rows.iloc[0])  # se houver duplicata, pega a 1ª
+                familias.add(fam_val)
+                log_callback(f"[FAM] SKU '{sku}' (norm='{sku_norm}') → família='{fam_val}'.")
+    else:
+        log_callback("[FAM] df_base_familia vazio ou sem colunas esperadas. Só MIX possível agora.")
+
+    # Se todos os SKUs convergem para a mesma família, usamos a família; caso contrário, MIX
+    row = pd.DataFrame()
+    if len(familias) == 1:
+        fam = list(familias)[0].upper()
+        # normalizações simples para as 2 famílias principais
+        is_biscoito = "BISCOITO" in fam
+        is_massa = "MASSA" in fam
+
+        if is_biscoito:
+            familia_detectada = "BISCOITO"
+            # Match no índice padronizado (upper/strip via contains case-insensitive)
+            row = df_sp_tab.loc[df_sp_tab.index.astype(str).str.contains("BISCOITO", case=False, regex=False)]
+            log_callback("[TAB] Família detectada: BISCOITO (buscando linha em df_sobrepeso_tabela).")
+        elif is_massa:
+            familia_detectada = "MASSA"
+            row = df_sp_tab.loc[df_sp_tab.index.astype(str).str.contains("MASSA", case=False, regex=False)]
+            log_callback("[TAB] Família detectada: MASSA (buscando linha em df_sobrepeso_tabela).")
         else:
-            familia_detectada = "MIX"
-            row = df_sobrepeso_tabela.loc[df_sobrepeso_tabela.index.str.contains("MIX", case=False)]
+            familia_detectada = fam  # mantém a família real encontrada
+            row = df_sp_tab.loc[df_sp_tab.index.astype(str).str.contains(fam, case=False, regex=False)]
+            log_callback(f"[TAB] Família detectada: '{fam}' (buscando linha correspondente).")
 
         if row.empty:
-            row = df_sobrepeso_tabela.loc[df_sobrepeso_tabela.index.str.contains("MIX", case=False)]
+            log_callback(f"[WARN] Não achei linha para família '{familia_detectada}' em df_sobrepeso_tabela. Fallback para MIX.")
+            familia_detectada = "MIX"
+    else:
+        if len(familias) == 0:
+            log_callback("[FAM] Nenhuma família encontrada para os SKUs → Fallback MIX.")
+        else:
+            log_callback(f"[FAM] Famílias múltiplas detectadas ({len(familias)}): {sorted(familias)} → MIX.")
+        familia_detectada = "MIX"
 
-        media_positiva = row["(+)"].values[0]
-        media_negativa = row["(-)"].values[0]
+    # Se ainda não temos 'row', buscar MIX
+    if row.empty:
+        # tenta por MIX
+        row = df_sp_tab.loc[df_sp_tab.index.astype(str).str.contains("MIX", case=False, regex=False)]
+        if row.empty:
+            log_callback("[ERRO] df_sobrepeso_tabela não contém entrada para 'MIX'. Usando defaults 0.02/0.01.")
+            media_positiva = 0.02
+            media_negativa = 0.01
+            return media_positiva, media_negativa, proporcao_sp_real, familia_detectada
 
-        log_callback(f"Sobrepeso físico (+): {media_positiva:.4f} | (-): {media_negativa:.4f}")
+    # Extrair (+) e (-)
+    if "(+)" not in row.columns or "(-)" not in row.columns:
+        # Em alguns arquivos, pode estar como '+', '-', 'POS', 'NEG' etc. Tentar alternativas
+        cand_pos = [c for c in row.columns if str(c).strip().upper() in ["(+)", "+", "POS", "POSITIVO", "SOBREPOS_POS", "SOBREPOS+"]] or ["(+)" ]
+        cand_neg = [c for c in row.columns if str(c).strip().upper() in ["(-)", "-", "NEG", "NEGATIVO", "SOBREPOS_NEG", "SOBREPOS-"]] or ["(-)"]
+
+        col_pos = cand_pos[0] if cand_pos[0] in row.columns else None
+        col_neg = cand_neg[0] if cand_neg[0] in row.columns else None
+
+        if (col_pos is None) or (col_neg is None):
+            log_callback(f"[ERRO] Colunas de sobrepeso '(+)'/'(-)' não encontradas em df_sobrepeso_tabela. "
+                         f"Cols disponíveis: {list(row.columns)}. Usando defaults 0.02/0.01.")
+            media_positiva = 0.02
+            media_negativa = 0.01
+            return media_positiva, media_negativa, proporcao_sp_real, familia_detectada
+    else:
+        col_pos, col_neg = "(+)", "(-)"
+
+    val_pos = _coerce_float(row.iloc[0][col_pos], default=0.02)
+    val_neg = _coerce_float(row.iloc[0][col_neg], default=0.01)
+
+    media_positiva = val_pos
+    media_negativa = val_neg
+
+    log_callback(f"[RESULT] Família='{familia_detectada}' | Sobrepeso físico (+)={media_positiva:.4f} | (-)={media_negativa:.4f}")
 
     return media_positiva, media_negativa, proporcao_sp_real, familia_detectada
+
 
 def preencher_formulario_com_openpyxl(path_copia, dados, itens_detalhados, log_callback, df_sku, df_remessa, df_fracao):
     try:
@@ -1259,7 +1490,7 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Simulador de Sobrepeso 3.0")
+        self.title("Simulador de Sobrepeso 4.0")
         self.geometry("1200x1000")
 
         self.placa = ctk.StringVar()
@@ -1275,7 +1506,6 @@ class App(ctk.CTk):
         self.tabs = ctk.CTkTabview(self)
         self.tabs.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
 
-        # --- Tab Simulador ---
         self.tab_simulador = self.tabs.add("Simulador")
         simulador_main_frame = ctk.CTkFrame(self.tab_simulador)
         simulador_main_frame.pack(fill="both", expand=True, padx=10, pady=10)
@@ -1326,7 +1556,6 @@ class App(ctk.CTk):
         self.log_geral = []
         self.log_tecnico = []
 
-        # --- Tab Edição ---
         self.tab_edicao = self.tabs.add("Edição de Remessa")
         self.df_expedicao = carregar_base_expedicao_csv(BASE_DIR_AUD, log=self.add_log)
         self.add_log(f"Base de expedição (CSV Auditoria) carregada com {len(self.df_expedicao)} linhas "
@@ -1387,11 +1616,9 @@ class App(ctk.CTk):
         self.add_log(mensagem)
 
     def log_callback_tecnico(self, mensagem):
-        # mantém histórico técnico E também joga na área de logs visível
         timestamp = datetime.now().strftime("%H:%M:%S")
         txt = f"[{timestamp}] {mensagem}"
         self.log_tecnico.append(txt)
-        # espelha no display
         self.add_log(mensagem)
 
 
@@ -1414,10 +1641,8 @@ class App(ctk.CTk):
             path_base_sap       = os.path.join(BASE_DIR_DOCS, "base_sap.xlsx")
             file_path = criar_copia_planilha(BASE_DIR_DOCS, "SIMULADOR_BALANÇA_LIMPO_2.xlsx", self.add_log)
 
-            # 4.a) Carrega BASE FISICA + BASE_FAMILIA com logs
             df_base_fisica, df_base_familia_local = carregar_base_fisica(BASE_DIR_DOCS, log=self.add_log)
 
-            # Mantém df_base_familia acessível para as funções que a usam como global
             global df_base_familia
             df_base_familia = df_base_familia_local
 
@@ -1439,7 +1664,6 @@ class App(ctk.CTk):
 
             self.progress_bar.set(0.5)
 
-            # em App.processar, troque:
             resultado = calcular_peso_final(
                 remessa, peso_vazio, qtd_paletes,
                 df_remessa, df_sku, df_sap, df_sobrepeso_real, df_base_fisica,
@@ -1525,10 +1749,9 @@ class App(ctk.CTk):
             except Exception as e:
                 self.log_callback_completo(f"Erro ao remover a cópia temporária: {e}")
 
-            # messagebox.showinfo(
-            #     "Sucesso",
-            #     f"Formulário exportado: {pdf_path}\n\nRelatório de divergência salvo:\n{relatorio_path}"
-            # )
+            messagebox.showinfo(
+                "Sucesso",
+            )
 
         except Exception as e:
             tb = traceback.format_exc()
