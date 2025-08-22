@@ -147,13 +147,11 @@ def carregar_base_expedicao_csv(base_dir: str, log=print):
 
     df_raw = ler_csv_corretamente(path_csv, log=log)
 
-    # mapeamento direto (sem heurística/guess)
     col_remessa = "REMESSA"
     col_item = "COD_ITEM"
     col_chave = "COD_RASTREABILIDADE"
     col_vol = "CASEWHENA.EXCLUIDO_POR_LOGINISNULLTHENA.VOLUMEELSE-1*A.VOLUMEEND"
 
-    # dataframe padronizado para o simulador
     df = pd.DataFrame({
         "REMESSA": df_raw[col_remessa].astype(str).str.strip(),
         "ITEM": df_raw[col_item].astype(str).str.strip(),
@@ -162,7 +160,6 @@ def carregar_base_expedicao_csv(base_dir: str, log=print):
                                     errors="coerce").fillna(0.0)
     })
 
-    # filtros simples
     df = df[(df["REMESSA"] != "") & (df["ITEM"] != "") & (df["COD_RASTREABILIDADE"] != "")]
     df = df.reset_index(drop=True)
 
@@ -189,7 +186,6 @@ def salvar_em_base_auxiliar(df_remessa, remessa, log_callback, fonte_dir):
         else:
             df_existente = pd.DataFrame()
 
-        # normaliza colunas esperadas
         df_remessa = df_remessa.copy()
         if "CHAVE_PALETE" not in df_remessa.columns and "COD_RASTREABILIDADE" in df_remessa.columns:
             df_remessa["CHAVE_PALETE"] = df_remessa["COD_RASTREABILIDADE"]
@@ -200,7 +196,6 @@ def salvar_em_base_auxiliar(df_remessa, remessa, log_callback, fonte_dir):
         df_remessa = df_remessa.dropna(subset=["ITEM"])
         df_remessa = df_remessa[df_remessa["ITEM"] != ""]
 
-        # de-dup pelo que o app manipula
         df_remessa = df_remessa.drop_duplicates(subset=["REMESSA", "ITEM", "CHAVE_PALETE"], keep="last")
 
         df_atualizado = pd.concat([df_existente, df_remessa], ignore_index=True)
@@ -253,7 +248,6 @@ def obter_dados_remessa(remessa, df_expedicao, log_callback):
         caminho_aux = os.path.join(BASE_DIR_DOCS, "expedicao_edicoes.xlsx")
         if os.path.exists(caminho_aux):
             df_aux = pd.read_excel(caminho_aux, sheet_name="dado_exp")
-            # normaliza colunas
             if "CHAVE_PALETE" not in df_aux.columns and "COD_RASTREABILIDADE" in df_aux.columns:
                 df_aux["CHAVE_PALETE"] = df_aux["COD_RASTREABILIDADE"]
 
@@ -264,7 +258,6 @@ def obter_dados_remessa(remessa, df_expedicao, log_callback):
                 log_callback(f"Remessa {remessa} encontrada na base auxiliar (edicoes)")
                 return df_filtrado_aux
 
-        # base original
         sr_rem = df_expedicao['REMESSA'] if 'REMESSA' in df_expedicao.columns else pd.Series([], dtype=str, index=df_expedicao.index)
         mask_ori = _match_remessa_series(sr_rem, remessa)
         if not isinstance(mask_ori, pd.Series):
@@ -273,7 +266,6 @@ def obter_dados_remessa(remessa, df_expedicao, log_callback):
         df_filtrado = df_expedicao.loc[mask_ori].copy()
 
         if not df_filtrado.empty:
-            # garante CHAVE_PALETE
             if "CHAVE_PALETE" not in df_filtrado.columns and "COD_RASTREABILIDADE" in df_filtrado.columns:
                 df_filtrado["CHAVE_PALETE"] = df_filtrado["COD_RASTREABILIDADE"]
             log_callback(f"Remessa {remessa} encontrada na base original")
@@ -387,7 +379,6 @@ def _pick_col_flex(df: pd.DataFrame, candidatos) -> str | None:
         key = _norm_colname(cand)
         if key in norm_map:
             return norm_map[key]
-    # tenta por “contém”
     want = {_norm_colname(c) for c in candidatos}
     for col in df.columns:
         n = _norm_colname(col)
@@ -409,17 +400,13 @@ def carregar_base_fisica(base_dir_docs: str, log=print):
     except Exception as e:
         log(f"[BASE_FISICA][erro] Falha ao ler planilha: {e!r}")
         raise
-
-    # Logs básicos
     log(f"[BASE_FISICA] caminho: {path}")
     log(f"[BASE_FISICA] linhas: {len(df_bf)} | colunas: {list(df_bf.columns)}")
 
     col_sku = _pick_col_flex(df_bf, ["CÓDIGO PRODUTO","CODIGO_PRODUTO","COD_PRODUTO","CÓD_PRODUTO"])
     col_sp  = _pick_col_flex(df_bf, ["SOBRE PESO","SOBREPESO","SOBRE_PESO","SOBRE PESO (%)","SOBREPESO_%","SOBRE_PESO_FIXO"])
-
     log(f"[BASE_FISICA] coluna SKU detectada: {col_sku!r} | coluna SP detectada: {col_sp!r}")
 
-    # Mostrar 5 primeiras linhas úteis
     try:
         prev = (df_bf[[c for c in [col_sku, col_sp] if c]]
                 .head(5)
@@ -428,7 +415,6 @@ def carregar_base_fisica(base_dir_docs: str, log=print):
     except Exception:
         pass
 
-    # Pequena limpeza de espaços
     if col_sku:
         df_bf[col_sku] = df_bf[col_sku].astype(str).str.strip()
     if col_sp:
@@ -508,7 +494,6 @@ def calculo_sobrepeso_fixo(sku, df_base_fisica, df_sku, peso_base_liq, log_callb
         return 0.0, 0.0
 
     except Exception as e:
-        # Mostra o tipo e a mensagem da exceção para depuração clara
         log_callback(f"[fixo][erro] SKU {sku}: {type(e).__name__}: {e}")
         return 0.0, 0.0
 
@@ -621,7 +606,6 @@ def calcular_peso_final(
             log_callback(f"[linha {i}] Coluna de código de produto não encontrada em df_sku.")
             continue
 
-        # --- normalizar a coluna e o SKU alvo ---
         serie_cod_norm = (
             df_sku[col_cod]
             .astype(str)
@@ -630,11 +614,9 @@ def calcular_peso_final(
 
         sku_norm = _norm_sku(sku)
 
-        # --- aplicar filtro ---
         mask = serie_cod_norm == sku_norm
         df_sku_filtrado = df_sku[mask]
 
-        # --- logs para depuração ---
         log_callback(f"[linha {i}] SKU alvo: {sku} (norm: {sku_norm}) "
                     f"– encontrados: {mask.sum()} linhas em df_sku.")
 
@@ -642,7 +624,6 @@ def calcular_peso_final(
             exemplo = df_sku_filtrado.head(1).to_dict(orient="records")[0]
             log_callback(f"[linha {i}] Exemplo da linha encontrada em df_sku: {exemplo}")
         else:
-            # mostra os primeiros 5 valores norm já normalizados pra comparar
             exemplos_cod = serie_cod_norm.head(5).tolist()
             log_callback(f"[linha {i}] Nenhum match. Exemplos normalizados em df_sku: {exemplos_cod}")
 
@@ -861,6 +842,16 @@ def gerar_relatorio_diferenca(remessa_num, peso_final_balança, peso_veiculo_vaz
             })
 
         df_dados = pd.DataFrame(dados_relatorio)
+        # --- sanidade: remover colunas duplicadas e tipar numéricos ---
+        dups = df_dados.columns[df_dados.columns.duplicated()].tolist()
+        if dups:
+            log_callback(f"[div] colunas duplicadas detectadas no df_dados: {dups} → mantendo a 1ª ocorrência")
+            df_dados = df_dados.loc[:, ~df_dados.columns.duplicated()].copy()
+
+        for col in ["Quantidade", "Peso Total Líquido", "Peso Unit. Líquido"]:
+            if col in df_dados.columns:
+                df_dados[col] = pd.to_numeric(df_dados[col], errors="coerce").fillna(0.0)
+
         peso_carga_real = converter_para_float_seguro(peso_final_balança - peso_veiculo_vazio)
         diferenca_total = converter_para_float_seguro((peso_estimado_total + peso_veiculo_vazio) - peso_final_balança)
 
@@ -869,11 +860,14 @@ def gerar_relatorio_diferenca(remessa_num, peso_final_balança, peso_veiculo_vaz
         else:
             df_dados["% Peso"] = 0.0
 
-        df_dados["Peso Proporcional Real"] = df_dados["% Peso"] * peso_carga_real
-        df_dados["Quantidade Real Estimada"] = df_dados.apply(
-            lambda x: round(x["Peso Proporcional Real"] / x["Peso Unit. Líquido"]) if x["Peso Unit. Líquido"] > 0 else 0,
-            axis=1
-        )
+        df_dados["Peso Proporcional Real"] = df_dados["% Peso"] * float(peso_carga_real)
+
+        num = df_dados["Peso Proporcional Real"]
+        den = df_dados["Peso Unit. Líquido"].replace(0, np.nan)
+
+        qre = np.floor((num / den).round(0)).fillna(0.0)  
+        df_dados["Quantidade Real Estimada"] = qre.astype(int)
+
 
         df_dados["Diferença Estimada (kg)"] = df_dados["% Peso"] * diferenca_total
         df_dados["Unid. Estimada de Divergência"] = df_dados["Quantidade Real Estimada"] - df_dados["Quantidade"]
@@ -931,7 +925,6 @@ def gerar_relatorio_diferenca(remessa_num, peso_final_balança, peso_veiculo_vaz
     except Exception as e:
         log_callback(f"Erro ao gerar relatório de divergência: {str(e)}")
         raise
-
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
@@ -1489,18 +1482,19 @@ class App(ctk.CTk):
             self.progress_bar.set(0.85)
             self.log_callback_completo("Gerando relatório de divergência em PDF...")
 
-            relatorio_path = gerar_relatorio_diferenca(
-                remessa_num=remessa,
-                peso_final_balança=peso_balanca,
-                peso_veiculo_vazio=peso_vazio,
-                df_remessa=df_remessa,
-                df_sku=df_sku,
-                peso_estimado_total=peso_com_sp,
-                pasta_excel=BASE_DIR_DOCS,
-                log_callback=self.log_callback_completo
-            )
-
-            self.log_callback_completo(f"Relatório adicional salvo em: {relatorio_path}")
+            # relatorio_path = gerar_relatorio_diferenca(
+            #     remessa_num=remessa,
+            #     peso_final_balança=peso_balanca,
+            #     peso_veiculo_vazio=peso_vazio,
+            #     df_remessa=df_remessa,
+            #     df_sku=df_sku,
+            #     peso_estimado_total=peso_com_sp,
+            #     pasta_excel=BASE_DIR_DOCS,
+            #     log_callback=self.log_callback_completo
+            # )
+            # Relatório de divergência desativado temporariamente
+            relatorio_path = None
+            self.log_callback_completo("Relatório de divergência desconsiderado temporariamente")
 
             try:
                 self.log_callback_completo("Iniciando impressão do relatório")
@@ -1531,10 +1525,10 @@ class App(ctk.CTk):
             except Exception as e:
                 self.log_callback_completo(f"Erro ao remover a cópia temporária: {e}")
 
-            messagebox.showinfo(
-                "Sucesso",
-                f"Formulário exportado: {pdf_path}\n\nRelatório de divergência salvo:\n{relatorio_path}"
-            )
+            # messagebox.showinfo(
+            #     "Sucesso",
+            #     f"Formulário exportado: {pdf_path}\n\nRelatório de divergência salvo:\n{relatorio_path}"
+            # )
 
         except Exception as e:
             tb = traceback.format_exc()
