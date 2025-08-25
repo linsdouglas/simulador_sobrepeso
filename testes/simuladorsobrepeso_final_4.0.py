@@ -537,76 +537,185 @@ def calculo_sobrepeso_fixo(sku, df_base_fisica, df_sku, peso_base_liq, log_callb
         log_callback(f"[fixo][erro] SKU {sku}: {type(e).__name__}: {e}")
         return 0.0, 0.0
 
+def _norm_str(x):
+    if pd.isna(x): return ""
+    return str(x).strip()
 
+def _norm_chave(x):
+    return re.sub(r"\s+", "", _norm_str(x))
 
+def _safe_hour(v):
+    """Extrai hora como inteiro de 0..23 a partir de datetime, time ou string."""
+    if pd.isna(v): return None
+    try:
+        h = getattr(v, "hour", None)
+        if h is not None:
+            return int(h)
+    except Exception:
+        pass
+    s = str(v).strip()
+    m = re.search(r"\b(\d{1,2})\s*:\s*\d{1,2}(?::\d{1,2})?\b", s)
+    if m:
+        h = int(m.group(1))
+        return max(0, min(23, h))
+    m = re.search(r"\b(\d{1,2})\b", s)
+    if m:
+        h = int(m.group(1))
+        return max(0, min(23, h))
+    return None
+
+def _coerce_dt(dt):
+    if isinstance(dt, pd.Timestamp):
+        return dt
+    try:
+        return pd.to_datetime(dt, dayfirst=True, errors="coerce")
+    except Exception:
+        return pd.NaT
 def processar_sobrepeso(chave_pallet, sku, peso_base_liq, 
                         df_sap, df_sobrepeso_real, df_base_fisica, df_sku, log_callback):
-    peso_base_liq = converter_para_float_seguro(peso_base_liq)
-    sp = 0.0                  
+    peso_base_liq = float(peso_base_liq or 0)
+    sp = 0.0
     origem_sp = "não encontrado"
-    ajuste_sp = 0.0            
+    ajuste_sp = 0.0
 
-    log_callback(f"[item] sku={sku} | chave={chave_pallet} | peso_liq≈{peso_base_liq:.2f} kg")
+    chave_norm = _norm_chave(chave_pallet)
+    log_callback(f"[item] sku={sku} | chave={chave_norm} | peso_liq≈{peso_base_liq:.2f} kg")
 
-    sap_col = "Chave Pallet" if "Chave Pallet" in df_sap.columns else ("CHAVE_PALETE" if "CHAVE_PALETE" in df_sap.columns else None)
-    if sap_col and pd.notna(chave_pallet) and chave_pallet in df_sap.get(sap_col, []):
-        pallet_info = df_sap.loc[df_sap[sap_col] == chave_pallet].iloc[0]
-        try:
-            lote = pallet_info.get("Lote", "")
-            data_producao = pallet_info["Data de produção"]
+    try:
+        sap_col = None
+        for c in ["Chave Pallet", "CHAVE_PALETE", "CHAVE_PALLET", "CHAVE_PALETE "]:
+            if c in df_sap.columns:
+                sap_col = c
+                break
+        if sap_col is None:
+            log_callback("[real] df_sap sem coluna de chave ('Chave Pallet' / 'CHAVE_PALETE').")
+        else:
+            col_norm = df_sap[sap_col].astype(str).str.replace(r"\s+", "", regex=True)
+            mask = col_norm.eq(chave_norm)
 
-            h_ini = getattr(pallet_info["Hora de criação"], "hour", 0)
-            h_fim = getattr(pallet_info["Hora de modificação"], "hour", h_ini)
-            hora_inicio = f"{int(h_ini):02d}:00:00"
-            hora_fim    = f"{int(h_fim):02d}:59:59"
-
-            linha_coluna = "L" + str(lote)[-3:]
-            if linha_coluna in ["LB06", "LB07"]:
-                linha_coluna = "LB06/07"
-
-            dt_ini = pd.to_datetime(f"{data_producao} {hora_inicio}")
-            dt_fim = pd.to_datetime(f"{data_producao} {hora_fim}")
-
-            df_sp_filtro = df_sobrepeso_real[
-                (df_sobrepeso_real["DataHora"] >= dt_ini) &
-                (df_sobrepeso_real["DataHora"] <= dt_fim)
-            ]
-
-            if linha_coluna in df_sp_filtro.columns:
-                sp_vals = pd.to_numeric(df_sp_filtro[linha_coluna], errors="coerce").fillna(0)
-                media_sp = float(sp_vals.mean()) / 100.0  # fração
-
-                if media_sp > 0 and peso_base_liq and peso_base_liq > 0:
-                    sp = media_sp
-                    origem_sp = "real"
-                    ajuste_sp = peso_base_liq * sp
-                    log_callback(f"[real] linha={linha_coluna} janela={hora_inicio}-{hora_fim} sp={sp:.4f} ajuste≈{ajuste_sp:.2f} kg")
-                else:
-                    log_callback(f"[real] média<=0 ou peso_base_liq=0 | usando fixo…")
+            found = int(mask.sum())
+            log_callback(f"[real] Busca chave no SAP: col='{sap_col}' | encontrados={found}")
+            if found == 0:
+                sug = df_sap.loc[col_norm.str.contains(chave_norm[:6], na=False)].head(2).get(sap_col, [])
+                log_callback(f"[real] Nenhuma linha com a chave exata. Sugestões (mesmos 6 primeiros): {list(sug)}")
             else:
-                log_callback(f"[real] coluna {linha_coluna} não existe | usando fixo…")
+                pallet_info = df_sap.loc[mask].iloc[0]
 
-        except Exception as e:
-            log_callback(f"[real][erro] sku={sku} chave={chave_pallet} -> {e}")
+                cand_lote = None
+                for c in ["Lote", "LOTE", "Lote de produção", "LOTE_PROD"]:
+                    if c in df_sap.columns:
+                        cand_lote = pallet_info.get(c)
+                        if pd.notna(cand_lote):
+                            break
+                lote = _norm_str(cand_lote)
+                linha_coluna = "L" + lote[-3:] if lote else ""
+                if linha_coluna in ["LB06", "LB07"]:
+                    linha_coluna = "LB06/07"
+                log_callback(f"[real] Lote='{lote}' → linha_coluna='{linha_coluna}'")
+
+                cand_data = None
+                for c in ["Data de produção", "DATA_PRODUCAO", "Data de Fabricação", "DATA FABRICACAO"]:
+                    if c in df_sap.columns:
+                        cand_data = pallet_info.get(c)
+                        if pd.notna(cand_data):
+                            break
+                dt_prod = _coerce_dt(cand_data)
+                h_ini = None
+                h_fim = None
+                for c in ["Hora de criação", "HORA_CRIACAO", "Hora Criação"]:
+                    if c in df_sap.columns:
+                        h_ini = _safe_hour(pallet_info.get(c))
+                        if h_ini is not None:
+                            break
+                for c in ["Hora de modificação", "HORA_MODIFICACAO", "Hora Modificação"]:
+                    if c in df_sap.columns:
+                        h_fim = _safe_hour(pallet_info.get(c))
+                        if h_fim is not None:
+                            break
+                if h_ini is None and h_fim is not None:
+                    h_ini = h_fim
+                if h_fim is None and h_ini is not None:
+                    h_fim = h_ini
+                if dt_prod is pd.NaT:
+                    log_callback(f"[real][warn] Data de produção inválida para a chave. Valor bruto='{cand_data}'")
+                if h_ini is None: h_ini = 0
+                if h_fim is None: h_fim = h_ini
+
+                if pd.isna(dt_prod):
+                    dt_ini = pd.NaT
+                    dt_fim = pd.NaT
+                else:
+                    dt_ini = pd.Timestamp(dt_prod.date()) + pd.Timedelta(hours=int(h_ini))
+                    dt_fim = pd.Timestamp(dt_prod.date()) + pd.Timedelta(hours=int(h_fim), minutes=59, seconds=59)
+
+                log_callback(f"[real] janela: dt_ini='{dt_ini}' dt_fim='{dt_fim}' (h_ini={h_ini}, h_fim={h_fim})")
+
+                if "DataHora" not in df_sobrepeso_real.columns:
+                    log_callback("[real][erro] df_sobrepeso_real não possui coluna 'DataHora'.")
+                elif not linha_coluna:
+                    log_callback("[real][erro] Não foi possível derivar 'linha_coluna' a partir do lote.")
+                else:
+                    if not pd.api.types.is_datetime64_any_dtype(df_sobrepeso_real["DataHora"]):
+                        try:
+                            df_sobrepeso_real = df_sobrepeso_real.copy()
+                            df_sobrepeso_real["DataHora"] = pd.to_datetime(
+                                df_sobrepeso_real["DataHora"], dayfirst=True, errors="coerce"
+                            )
+                            log_callback("[real] Convertemos 'DataHora' para datetime.")
+                        except Exception as e:
+                            log_callback(f"[real][erro] Falha ao converter 'DataHora': {e}")
+
+                    if pd.isna(dt_ini) or pd.isna(dt_fim):
+                        df_sp_filtro = df_sobrepeso_real.iloc[0:0]  # vazio
+                        log_callback("[real][warn] dt_ini/dt_fim inválidos → filtro vazio.")
+                    else:
+                        df_sp_filtro = df_sobrepeso_real[
+                            (df_sobrepeso_real["DataHora"] >= dt_ini) &
+                            (df_sobrepeso_real["DataHora"] <= dt_fim)
+                        ]
+
+                    log_callback(f"[real] linhas na janela: {len(df_sp_filtro)} "
+                                 f"(DataHora min={df_sobrepeso_real['DataHora'].min()}, max={df_sobrepeso_real['DataHora'].max()})")
+
+                    col_ok = linha_coluna in df_sp_filtro.columns
+                    if not col_ok:
+                        log_callback(f"[real][erro] Coluna '{linha_coluna}' NÃO existe em df_sobrepeso_real. "
+                                     f"Cols disp: {list(df_sp_filtro.columns)}")
+                    else:
+                        sp_vals = pd.to_numeric(df_sp_filtro[linha_coluna], errors="coerce")
+                        media_raw = float(sp_vals.mean()) if len(sp_vals) else 0.0
+                        media_sp = media_raw/100.0 if media_raw > 1.0 else media_raw
+                        log_callback(f"[real] média({linha_coluna}) bruta={media_raw:.6f} → usada={media_sp:.6f}")
+
+                        if media_sp > 0 and peso_base_liq > 0:
+                            sp = media_sp
+                            origem_sp = "real"
+                            ajuste_sp = peso_base_liq * sp
+                            log_callback(f"[real][OK] sp={sp:.4f} ajuste≈{ajuste_sp:.2f} kg")
+                        else:
+                            log_callback("[real] média<=0 ou peso_base_liq<=0 → fallback fixo")
+
+    except Exception as e:
+        log_callback(f"[real][exceção] sku={sku} chave={chave_norm} -> {e}")
 
     if sp == 0:
         sp_frac, ajuste_fixo_kg = calculo_sobrepeso_fixo(sku, df_base_fisica, df_sku, peso_base_liq, log_callback)
 
-        if (sp_frac is None or sp_frac == 0) and ajuste_fixo_kg and peso_base_liq and peso_base_liq > 0:
+        if (sp_frac is None or sp_frac == 0) and ajuste_fixo_kg and peso_base_liq > 0:
             sp_frac = float(ajuste_fixo_kg) / float(peso_base_liq)
 
         if (sp_frac or 0) > 0 or (ajuste_fixo_kg or 0) > 0:
             sp = float(sp_frac or 0.0)
             origem_sp = "fixo"
             ajuste_sp = float(ajuste_fixo_kg or 0.0)
-            if sp == 0 and peso_base_liq and peso_base_liq > 0:
+            if sp == 0 and peso_base_liq > 0:
                 sp = ajuste_sp / float(peso_base_liq)
-            if ajuste_sp == 0 and peso_base_liq and sp > 0:
+            if ajuste_sp == 0 and peso_base_liq > 0 and sp > 0:
                 ajuste_sp = float(peso_base_liq) * float(sp)
 
             log_callback(f"[fixo] adotado sp={sp:.4f} ajuste≈{ajuste_sp:.2f} kg")
         else:
-            log_callback(f"[sp] não encontrado (real/fixo).")
+            log_callback("[sp] não encontrado (real/fixo).")
 
     if sp <= 0 and origem_sp != "fixo":
         sp, origem_sp, ajuste_sp = 0.0, "não encontrado", 0.0
