@@ -720,8 +720,12 @@ def calcular_peso_final(
     df_sap,
     df_sobrepeso_real,
     df_base_fisica,
-    log_callback
+    log_callback,
+    skus_nao_mapeados=None,
 ):
+    if skus_nao_mapeados is None:
+        skus_nao_mapeados = set()
+
     peso_veiculo_vazio = converter_para_float_seguro(peso_veiculo_vazio)
     qtd_paletes = converter_para_float_seguro(qtd_paletes)
 
@@ -759,27 +763,39 @@ def calcular_peso_final(
         if not col_cod:
             log_callback(f"[linha {i}] Coluna de código de produto não encontrada em df_sku.")
             continue
-
-        serie_cod_norm = (
-            df_sku[col_cod]
-            .astype(str)
-            .str.replace(r"\D", "", regex=True)
-        )
-
-        sku_norm = _norm_sku(sku)
-
-        mask = serie_cod_norm == sku_norm
-        df_sku_filtrado = df_sku[mask]
-
-        log_callback(f"[linha {i}] SKU alvo: {sku} (norm: {sku_norm}) "
-                    f"– encontrados: {mask.sum()} linhas em df_sku.")
-
-        if not df_sku_filtrado.empty:
-            exemplo = df_sku_filtrado.head(1).to_dict(orient="records")[0]
-            log_callback(f"[linha {i}] Exemplo da linha encontrada em df_sku: {exemplo}")
         else:
-            exemplos_cod = serie_cod_norm.head(5).tolist()
-            log_callback(f"[linha {i}] Nenhum match. Exemplos normalizados em df_sku: {exemplos_cod}")
+            serie_cod_norm = df_sku[col_cod].astype(str).str.replace(r"\D", "", regex=True)
+            mask = serie_cod_norm == sku_norm
+            df_sku_filtrado = df_sku[mask]
+
+            if df_sku_filtrado.empty:
+                achou = False
+                for c in ["CODIGO_PRODUTO","CÓDIGO PRODUTO","CÓD_PRODUTO","COD_PROD"]:
+                    if c in df_sku.columns:
+                        s2 = df_sku[c].astype(str).str.replace(r"\D", "", regex=True)
+                        df_try = df_sku.loc[s2 == sku_norm]
+                        if not df_try.empty:
+                            df_sku_filtrado = df_try
+                            achou = True
+                            log_callback(f"[linha {i}] Fallback: SKU encontrado via coluna '{c}'.")
+                            break
+
+                if not achou:
+                    skus_nao_mapeados.add(str(sku))
+                    log_callback(f"[linha {i}] WARN: SKU '{sku}' não encontrado em df_sku. Assumindo pesos 0.")
+                    p_bruto = p_liq = 0.0
+                else:
+                    row_sku = df_sku_filtrado.iloc[0]
+                    col_pbru = _pick_col_flex(df_sku_filtrado, ["QTDE_PESO_BRU","PESO_BRUTO_CAIXA","PESO_BRUTO","PESO_BRU"])
+                    col_pliq = _pick_col_flex(df_sku_filtrado, ["QTDE_PESO_LIQ","PESO_LIQ_CAIXA","PESO_LIQ","PESO_LIQUIDO"])
+                    p_bruto = converter_para_float_seguro(row_sku[col_pbru]) if col_pbru else 0.0
+                    p_liq   = converter_para_float_seguro(row_sku[col_pliq]) if col_pliq else 0.0
+            else:
+                row_sku = df_sku_filtrado.iloc[0]
+                col_pbru = _pick_col_flex(df_sku_filtrado, ["QTDE_PESO_BRU","PESO_BRUTO_CAIXA","PESO_BRUTO","PESO_BRU"])
+                col_pliq = _pick_col_flex(df_sku_filtrado, ["QTDE_PESO_LIQ","PESO_LIQ_CAIXA","PESO_LIQ","PESO_LIQUIDO"])
+                p_bruto = converter_para_float_seguro(row_sku[col_pbru]) if col_pbru else 0.0
+                p_liq   = converter_para_float_seguro(row_sku[col_pliq]) if col_pliq else 0.0
 
         p_bruto = converter_para_float_seguro(df_sku_filtrado.iloc[0]["QTDE_PESO_BRU"])
         p_liq   = converter_para_float_seguro(df_sku_filtrado.iloc[0]["QTDE_PESO_LIQ"])
