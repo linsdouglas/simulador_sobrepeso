@@ -672,7 +672,8 @@ def processar_sobrepeso(chave_pallet, sku, peso_base_liq,
                     else:
                         sp_vals = pd.to_numeric(df_sp_filtro[linha_coluna], errors="coerce")
                         media_raw = float(sp_vals.mean()) if len(sp_vals) else 0.0
-                        media_sp = media_raw/100.0 if media_raw > 1.0 else media_raw
+                        media_sp = media_raw / 100.0
+
                         log_callback(f"[real] média({linha_coluna}) bruta={media_raw:.6f} → usada={media_sp:.6f}")
 
                         if media_sp > 0 and peso_base_liq > 0:
@@ -889,8 +890,8 @@ def calcular_limites_sobrepeso_por_quantidade(
     df_fracao,
     log_callback
 ):
-    total_quantidade = 0
-    quantidade_com_sp_real = 0
+    total_quantidade = 0.0
+    quantidade_com_sp_real = 0.0
     ponderador_pos = 0.0
     ponderador_neg = 0.0
     familia_detectada = "MIX"
@@ -911,8 +912,7 @@ def calcular_limites_sobrepeso_por_quantidade(
         df_fam = pd.DataFrame(columns=["_COD_NORM_", "_FAM_NORM_"])
 
     df_sp_tab, sp_index_source = _ensure_df_sobrepeso_index(df_sobrepeso_tabela)
-    debug_index_hint = f"fonte_index='{sp_index_source}', indice_name='{df_sp_tab.index.name}'"
-    log_callback(f"[DEBUG] df_sobrepeso_tabela preparado ({debug_index_hint}), linhas={len(df_sp_tab)}.")
+    log_callback(f"[DEBUG] df_sobrepeso_tabela preparado (fonte_index='{sp_index_source}', indice_name='{df_sp_tab.index.name}'), linhas={len(df_sp_tab)}.")
 
     agrupado_por_sku = defaultdict(list)
     for item in itens_detalhados:
@@ -960,16 +960,6 @@ def calcular_limites_sobrepeso_por_quantidade(
     log_callback(f"[AGREGADO] Total_qtde={total_quantidade:.3f} Qtde_com_SP_Real={quantidade_com_sp_real:.3f} "
                  f"Proporção_SP_Real={proporcao_sp_real:.2%}")
 
-    if proporcao_sp_real >= 0.5:
-        if quantidade_com_sp_real > 0:
-            media_positiva = (ponderador_pos / quantidade_com_sp_real) if ponderador_pos > 0 else 0.02
-            media_negativa = (ponderador_neg / quantidade_com_sp_real) if ponderador_neg > 0 else 0.01
-        else:
-            media_positiva = 0.02
-            media_negativa = 0.01
-        log_callback("[REGRA] >=50% com SP Real → usando médias ponderadas do realizado.")
-        return media_positiva, media_negativa, proporcao_sp_real, "REAL"
-
     familias = set()
     if not df_fam.empty:
         for sku in agrupado_por_sku.keys():
@@ -978,7 +968,7 @@ def calcular_limites_sobrepeso_por_quantidade(
             if fam_rows.empty:
                 log_callback(f"[FAM] SKU '{sku}' (norm='{sku_norm}') sem família mapeada na base.")
             else:
-                fam_val = str(fam_rows.iloc[0])  
+                fam_val = str(fam_rows.iloc[0]).upper().strip()
                 familias.add(fam_val)
                 log_callback(f"[FAM] SKU '{sku}' (norm='{sku_norm}') → família='{fam_val}'.")
     else:
@@ -986,10 +976,9 @@ def calcular_limites_sobrepeso_por_quantidade(
 
     row = pd.DataFrame()
     if len(familias) == 1:
-        fam = list(familias)[0].upper()
-        is_biscoito = "BISCOITO" in fam
-        is_massa = "MASSA" in fam
-
+        fam = list(familias)[0]
+        is_biscoito = "BISCOITO" in fam or "CRACKER" in fam  
+        is_massa = "MASSA" in fam or "MACARR" in fam         
         if is_biscoito:
             familia_detectada = "BISCOITO"
             row = df_sp_tab.loc[df_sp_tab.index.astype(str).str.contains("BISCOITO", case=False, regex=False)]
@@ -999,10 +988,9 @@ def calcular_limites_sobrepeso_por_quantidade(
             row = df_sp_tab.loc[df_sp_tab.index.astype(str).str.contains("MASSA", case=False, regex=False)]
             log_callback("[TAB] Família detectada: MASSA (buscando linha em df_sobrepeso_tabela).")
         else:
-            familia_detectada = fam  
+            familia_detectada = fam
             row = df_sp_tab.loc[df_sp_tab.index.astype(str).str.contains(fam, case=False, regex=False)]
             log_callback(f"[TAB] Família detectada: '{fam}' (buscando linha correspondente).")
-
         if row.empty:
             log_callback(f"[WARN] Não achei linha para família '{familia_detectada}' em df_sobrepeso_tabela. Fallback para MIX.")
             familia_detectada = "MIX"
@@ -1017,35 +1005,56 @@ def calcular_limites_sobrepeso_por_quantidade(
         row = df_sp_tab.loc[df_sp_tab.index.astype(str).str.contains("MIX", case=False, regex=False)]
         if row.empty:
             log_callback("[ERRO] df_sobrepeso_tabela não contém entrada para 'MIX'. Usando defaults 0.02/0.01.")
-            media_positiva = 0.02
-            media_negativa = 0.01
-            return media_positiva, media_negativa, proporcao_sp_real, familia_detectada
-
-    if "(+)" not in row.columns or "(-)" not in row.columns:
-        cand_pos = [c for c in row.columns if str(c).strip().upper() in ["(+)", "+", "POS", "POSITIVO", "SOBREPOS_POS", "SOBREPOS+"]] or ["(+)" ]
-        cand_neg = [c for c in row.columns if str(c).strip().upper() in ["(-)", "-", "NEG", "NEGATIVO", "SOBREPOS_NEG", "SOBREPOS-"]] or ["(-)"]
-
-        col_pos = cand_pos[0] if cand_pos[0] in row.columns else None
-        col_neg = cand_neg[0] if cand_neg[0] in row.columns else None
-
-        if (col_pos is None) or (col_neg is None):
-            log_callback(f"[ERRO] Colunas de sobrepeso '(+)'/'(-)' não encontradas em df_sobrepeso_tabela. "
-                         f"Cols disponíveis: {list(row.columns)}. Usando defaults 0.02/0.01.")
-            media_positiva = 0.02
-            media_negativa = 0.01
-            return media_positiva, media_negativa, proporcao_sp_real, familia_detectada
+            media_positiva_tab = 0.02
+            media_negativa_tab = 0.01
+        else:
+            if "(+)" in row.columns and "(-)" in row.columns:
+                media_positiva_tab = _coerce_float(row.iloc[0]["(+)"], default=0.02)
+                media_negativa_tab = _coerce_float(row.iloc[0]["(-)"], default=0.01)
+            else:
+                cand_pos = [c for c in row.columns if str(c).strip().upper() in ["(+)", "+", "POS", "POSITIVO", "SOBREPOS_POS", "SOBREPOS+"]]
+                cand_neg = [c for c in row.columns if str(c).strip().upper() in ["(-)", "-", "NEG", "NEGATIVO", "SOBREPOS_NEG", "SOBREPOS-"]]
+                col_pos = cand_pos[0] if cand_pos else None
+                col_neg = cand_neg[0] if cand_neg else None
+                if (col_pos is None) or (col_neg is None):
+                    log_callback(f"[ERRO] Colunas '(+)'/'(-)' não encontradas para MIX. Usando defaults 0.02/0.01.")
+                    media_positiva_tab = 0.02
+                    media_negativa_tab = 0.01
+                else:
+                    media_positiva_tab = _coerce_float(row.iloc[0][col_pos], default=0.02)
+                    media_negativa_tab = _coerce_float(row.iloc[0][col_neg], default=0.01)
     else:
-        col_pos, col_neg = "(+)", "(-)"
+        if "(+)" in row.columns and "(-)" in row.columns:
+            media_positiva_tab = _coerce_float(row.iloc[0]["(+)"], default=0.02)
+            media_negativa_tab = _coerce_float(row.iloc[0]["(-)"], default=0.01)
+        else:
+            cand_pos = [c for c in row.columns if str(c).strip().upper() in ["(+)", "+", "POS", "POSITIVO", "SOBREPOS_POS", "SOBREPOS+"]]
+            cand_neg = [c for c in row.columns if str(c).strip().upper() in ["(-)", "-", "NEG", "NEGATIVO", "SOBREPOS_NEG", "SOBREPOS-"]]
+            col_pos = cand_pos[0] if cand_pos else None
+            col_neg = cand_neg[0] if cand_neg else None
+            if (col_pos is None) or (col_neg is None):
+                log_callback(f"[ERRO] Colunas de sobrepeso '(+)'/'(-)' não encontradas na linha da família '{familia_detectada}'. Usando defaults 0.02/0.01.")
+                media_positiva_tab = 0.02
+                media_negativa_tab = 0.01
+            else:
+                media_positiva_tab = _coerce_float(row.iloc[0][col_pos], default=0.02)
+                media_negativa_tab = _coerce_float(row.iloc[0][col_neg], default=0.01)
 
-    val_pos = _coerce_float(row.iloc[0][col_pos], default=0.02)
-    val_neg = _coerce_float(row.iloc[0][col_neg], default=0.01)
+    if proporcao_sp_real >= 0.9 and quantidade_com_sp_real > 0:
+        media_positiva = (ponderador_pos / quantidade_com_sp_real) if ponderador_pos > 0 else media_positiva_tab
+        media_negativa = (ponderador_neg / quantidade_com_sp_real) if ponderador_neg > 0 else media_negativa_tab
+        origem_taxa = "REAL"
+        log_callback("[REGRA] >=90% com SP Real → usando médias ponderadas do realizado.")
+    else:
+        media_positiva = media_positiva_tab
+        media_negativa = media_negativa_tab
+        origem_taxa = "TABELA"
+        log_callback("[REGRA] <90% com SP Real → usando tabela por família.")
 
-    media_positiva = val_pos
-    media_negativa = val_neg
-
-    log_callback(f"[RESULT] Família='{familia_detectada}' | Sobrepeso físico (+)={media_positiva:.4f} | (-)={media_negativa:.4f}")
+    log_callback(f"[RESULT] Origem={origem_taxa} | Família='{familia_detectada}' | Sobrepeso (+)={media_positiva:.4f} | (-)={media_negativa:.4f}")
 
     return media_positiva, media_negativa, proporcao_sp_real, familia_detectada
+
 
 
 def preencher_formulario_com_openpyxl(path_copia, dados, itens_detalhados, log_callback, df_sku, df_remessa, df_fracao):
@@ -1095,7 +1104,7 @@ def preencher_formulario_com_openpyxl(path_copia, dados, itens_detalhados, log_c
         for idx, item in enumerate(itens_ordenados[:max_itens]):
             linha = linha_inicio + idx
             ws[f"C{linha}"] = f"{item['sku']} ({item['origem']})"
-            ws[f"D{linha}"] = f"{item['sp']*100:.3f}"
+            ws[f"D{linha}"] = f"{item['sp']*100:.3f}%"
 
         wb.save(path_copia)
         wb.close()
