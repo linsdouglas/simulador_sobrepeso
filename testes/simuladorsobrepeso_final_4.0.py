@@ -797,9 +797,6 @@ def calcular_peso_final(
                 p_bruto = converter_para_float_seguro(row_sku[col_pbru]) if col_pbru else 0.0
                 p_liq   = converter_para_float_seguro(row_sku[col_pliq]) if col_pliq else 0.0
 
-        p_bruto = converter_para_float_seguro(df_sku_filtrado.iloc[0]["QTDE_PESO_BRU"])
-        p_liq   = converter_para_float_seguro(df_sku_filtrado.iloc[0]["QTDE_PESO_LIQ"])
-
         peso_bruto = p_bruto * qtd if p_bruto > 0 else 0.0
         peso_liq   = p_liq   * qtd if p_liq   > 0 else 0.0
 
