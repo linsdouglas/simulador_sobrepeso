@@ -71,11 +71,9 @@ def _match_remessa_series(sr, alvo):
     b_no0 = (b.lstrip('0') or '0')
 
     mask = (vals.eq(a) | vals.eq(b) | vals_no0.eq(a_no0) | vals_no0.eq(b_no0))
-    # garante mesmo índice e dtype bool
+
     mask = mask.reindex(sr.index).fillna(False).astype(bool)
     return mask
-
-
 
 def converter_para_float_seguro(valor):
     if pd.isna(valor):
@@ -132,7 +130,6 @@ def ler_csv_corretamente(csv_path, log=print):
         rows.append(_split_fix(ln.split(";"), len(EXPECTED_COLS)))
 
     df = pd.DataFrame(rows, columns=EXPECTED_COLS, dtype=str)
-    # limpeza leve
     df.columns = [c.strip() for c in df.columns]
     for c in ("UPDATED_AT","DELETED_AT","EXCLUIDO_POR_LOGIN"):
         if c in df.columns:
@@ -1681,13 +1678,18 @@ class App(ctk.CTk):
             self.add_log(f"Erro ao atualizar bases: {e}")
 
     def add_log(self, msg):
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        entrada = f"[{timestamp}] {msg}"
-        self.log_text.append(entrada)
+        if isinstance(msg, str) and msg.startswith("[") and "] " in msg[:10]:
+            entrada = msg
+        else:
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            entrada = f"[{timestamp}] {msg}"
+
+        self.log_text.append(entrada)                 
         self.log_display.configure(state="normal")
         self.log_display.insert("end", entrada + "\n")
         self.log_display.see("end")
         self.log_display.configure(state="disabled")
+
 
     def limpar_logs(self):
         self.log_text.clear()
@@ -1697,15 +1699,13 @@ class App(ctk.CTk):
         self.log_display.configure(state="disabled")
 
     def log_callback_completo(self, mensagem):
-        print(mensagem)
-        self.log_geral.append(mensagem)
         self.add_log(mensagem)
+        self.log_geral.append(self.log_text[-1])
+
 
     def log_callback_tecnico(self, mensagem):
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        txt = f"[{timestamp}] {mensagem}"
-        self.log_tecnico.append(txt)
         self.add_log(mensagem)
+        self.log_tecnico.append(self.log_text[-1])
 
 
     def iniciar_processamento(self):
@@ -1820,8 +1820,9 @@ class App(ctk.CTk):
                     pdf_path,
                     remessa,
                     log_callback=self.log_callback_completo,
-                    log_geral=self.log_tecnico
+                    log_geral=self.log_text,   
                 )
+
                 self.log_callback_completo("Envio com sucesso para o e-mail de tratativa")
                 self.progress_bar.set(1)
                 self.add_log("✅ Processamento concluído com sucesso!")
