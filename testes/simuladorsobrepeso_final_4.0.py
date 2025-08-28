@@ -1577,7 +1577,7 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Simulador de Sobrepeso 4.0")
+        self.title("Simulador de Sobrepeso 5.0")
         self.geometry("1200x1000")
 
         self.placa = ctk.StringVar()
