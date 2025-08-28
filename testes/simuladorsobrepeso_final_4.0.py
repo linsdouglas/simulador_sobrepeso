@@ -155,6 +155,8 @@ def carregar_base_expedicao_csv(base_dir: str, log=print):
         "QUANTIDADE": pd.to_numeric(df_raw[col_vol].astype(str).str.replace(",", ".", regex=False),
                                     errors="coerce").fillna(0.0)
     })
+    if "ID" in df_raw.columns:
+        df["ID"] = df_raw["ID"].astype(str).str.strip()
 
     df = df[(df["REMESSA"] != "") & (df["ITEM"] != "") & (df["COD_RASTREABILIDADE"] != "")]
     df = df.reset_index(drop=True)
@@ -187,6 +189,8 @@ def salvar_em_base_auxiliar(df_remessa, remessa, log_callback, fonte_dir):
             df_remessa["CHAVE_PALETE"] = df_remessa["COD_RASTREABILIDADE"]
         if "COD_RASTREABILIDADE" not in df_remessa.columns and "CHAVE_PALETE" in df_remessa.columns:
             df_remessa["COD_RASTREABILIDADE"] = df_remessa["CHAVE_PALETE"]
+        if "ID" in df_remessa.columns:
+            df_remessa["ID"] = df_remessa["ID"].astype(str).str.strip()
 
         df_remessa["REMESSA"] = df_remessa["REMESSA"].astype(str).str.replace(r"\.0$", "", regex=True)
         df_remessa = df_remessa.dropna(subset=["ITEM"])
@@ -734,7 +738,7 @@ def calcular_peso_final(
 
     df_remessa = df_remessa.copy()
     df_remessa["QUANTIDADE"] = df_remessa["QUANTIDADE"].apply(converter_para_float_seguro)
-    df_remessa = df_remessa.drop_duplicates(subset=["ITEM", "QUANTIDADE", "CHAVE_PALETE"], keep="last")
+    df_remessa = df_remessa.drop_duplicates(subset=["ID","ITEM", "QUANTIDADE", "CHAVE_PALETE"], keep="last")
     log_callback(f"[remessa] {remessa_num} | linhas após dedup: {len(df_remessa)}")
 
     peso_base_total_bruto = 0.0
@@ -1425,7 +1429,7 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
                     self.label_status.configure(text="Remessa não encontrada em nenhuma base!", text_color="red")
                     return
 
-            colunas_unicas = ['ITEM', 'QUANTIDADE', 'CHAVE_PALETE']
+            colunas_unicas = ['ITEM', 'QUANTIDADE', 'CHAVE_PALETE','ID']
             df_sem_duplicatas = df_filtrado.drop_duplicates(subset=colunas_unicas)
             if len(df_filtrado) != len(df_sem_duplicatas):
                 duplicatas = len(df_filtrado) - len(df_sem_duplicatas)
@@ -1491,7 +1495,7 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
                 return
 
             df_completo["REMESSA"] = remessa
-            df_completo = df_completo.drop_duplicates(subset=["ITEM", "CHAVE_PALETE"], keep="last")
+            df_completo = df_completo.drop_duplicates(subset=["ITEM", "CHAVE_PALETE","ID"], keep="last")
             salvar_em_base_auxiliar(df_completo, remessa, self.log_callback, self.fonte_dir)
 
             self.dados_remessa = df_completo[["ITEM", "QUANTIDADE", "CHAVE_PALETE"]].copy()
@@ -1506,7 +1510,7 @@ class EdicaoRemessaFrame(ctk.CTkFrame):
     def renderizar_tabela(self, df_filtrado=None):
         for widget in self.tabela_frame.winfo_children():
             widget.destroy()
-        df_exibicao = (df_filtrado.copy() if df_filtrado is not None else self.dados_remessa.copy()).drop_duplicates(subset=["ITEM", "QUANTIDADE", "CHAVE_PALETE"], keep="last")
+        df_exibicao = (df_filtrado.copy() if df_filtrado is not None else self.dados_remessa.copy()).drop_duplicates(subset=["ITEM", "QUANTIDADE", "CHAVE_PALETE","ID"], keep="last")
         if df_exibicao.empty:
             self.log_callback("Nenhum dado para exibir.")
             return
